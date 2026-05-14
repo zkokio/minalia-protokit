@@ -3,21 +3,21 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { State, assert, state } from "@proto-kit/protocol";
+import { StateMap, State, assert, state } from "@proto-kit/protocol";
 import { Balance, TokenId } from "@proto-kit/library";
-import { PublicKey, Provable, UInt64, Bool, Struct } from "o1js";
+import { Field, PublicKey, Provable, UInt64, Bool, Struct } from "o1js";
 import { inject } from "tsyringe";
 import { Balances } from "./balances";
 
-// Per-development state. Toy version: ONE development globally.
-// Real version would key this by a devId in a StateMap.
+// State for one development. Now lives in a StateMap keyed by devId.
 export class DevelopmentState extends Struct({
   manager: PublicKey,
   treasury: PublicKey,
   tokenId: TokenId,
   baseYield: UInt64,
   cycleLength: UInt64,
-  lastPayoutBlock: UInt64,
+  tickCount: UInt64,
+  lastPayoutTick: UInt64,
   decisionA: UInt64,
   decisionB: UInt64,
   decisionC: UInt64,
@@ -26,8 +26,10 @@ export class DevelopmentState extends Struct({
 
 @runtimeModule()
 export class DevelopmentYield extends RuntimeModule<unknown> {
-  @state() public dev = State.from<DevelopmentState>(DevelopmentState);
-  @state() public blockHeight = State.from<UInt64>(UInt64);
+  @state() public devs = StateMap.from<Field, DevelopmentState>(
+    Field,
+    DevelopmentState,
+  );
 
   public constructor(@inject("Balances") public balances: Balances) {
     super();
@@ -35,23 +37,26 @@ export class DevelopmentYield extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async initialiseDev(
+    devId: Field,
     manager: PublicKey,
     treasury: PublicKey,
     tokenId: TokenId,
     baseYield: Balance,
     cycleLength: UInt64,
   ): Promise<void> {
-    const existing = await this.dev.get();
+    const existing = await this.devs.get(devId);
     assert(existing.value.initialised.not(), "Development already initialised");
 
-    await this.dev.set(
+    await this.devs.set(
+      devId,
       new DevelopmentState({
         manager,
         treasury,
         tokenId: tokenId,
         baseYield: UInt64.Unsafe.fromField(baseYield.value),
         cycleLength,
-        lastPayoutBlock: UInt64.zero,
+        tickCount: UInt64.zero,
+        lastPayoutTick: UInt64.zero,
         decisionA: UInt64.from(100),
         decisionB: UInt64.from(100),
         decisionC: UInt64.from(100),
@@ -62,12 +67,13 @@ export class DevelopmentYield extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async updateDecisions(
+    devId: Field,
     decisionA: UInt64,
     decisionB: UInt64,
     decisionC: UInt64,
   ): Promise<void> {
-    const state = (await this.dev.get()).value;
-    assert(state.initialised, "Development not initialised");
+    const result = await this.devs.get(devId);
+    assert(result.value.initialised, "Development not initialised");
 
     const fifty = UInt64.from(50);
     const twoHundred = UInt64.from(200);
@@ -78,9 +84,10 @@ export class DevelopmentYield extends RuntimeModule<unknown> {
     assert(decisionC.greaterThanOrEqual(fifty), "decisionC below 50");
     assert(decisionC.lessThanOrEqual(twoHundred), "decisionC above 200");
 
-    await this.dev.set(
+    await this.devs.set(
+      devId,
       new DevelopmentState({
-        ...state,
+        ...result.value,
         decisionA,
         decisionB,
         decisionC,
@@ -89,16 +96,15 @@ export class DevelopmentYield extends RuntimeModule<unknown> {
   }
 
   @runtimeMethod()
-  public async tick(): Promise<void> {
-    const state = (await this.dev.get()).value;
+  public async tick(devId: Field): Promise<void> {
+    const result = await this.devs.get(devId);
+    const state = result.value;
     assert(state.initialised, "Development not initialised");
 
-    const currentHeight = (await this.blockHeight.get()).value;
-    const newHeight = currentHeight.add(UInt64.from(1));
-    await this.blockHeight.set(newHeight);
+    const newTickCount = state.tickCount.add(UInt64.from(1));
 
-    const nextPayoutDue = state.lastPayoutBlock.add(state.cycleLength);
-    const cycleReady = newHeight.greaterThanOrEqual(nextPayoutDue);
+    const nextPayoutDue = state.lastPayoutTick.add(state.cycleLength);
+    const cycleReady = newTickCount.greaterThanOrEqual(nextPayoutDue);
 
     const yieldRaw = state.baseYield
       .mul(state.decisionA)
@@ -125,18 +131,22 @@ export class DevelopmentYield extends RuntimeModule<unknown> {
     const newLastPayout = Provable.if(
       cycleReady,
       UInt64,
-      newHeight,
-      state.lastPayoutBlock,
+      newTickCount,
+      state.lastPayoutTick,
     );
-    await this.dev.set(
+
+    await this.devs.set(
+      devId,
       new DevelopmentState({
         ...state,
-        lastPayoutBlock: newLastPayout,
+        tickCount: newTickCount,
+        lastPayoutTick: newLastPayout,
       }),
     );
 
     Provable.log("tick", {
-      newHeight,
+      devId,
+      newTickCount,
       cycleReady,
       yieldToPay,
       managerShare,
