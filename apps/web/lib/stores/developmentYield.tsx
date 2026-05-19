@@ -2,18 +2,41 @@ import { create } from "zustand";
 import { Client, useClientStore } from "./client";
 import { immer } from "zustand/middleware/immer";
 import { PendingTransaction, UnsignedTransaction } from "@proto-kit/sequencer";
-import { Balance, TokenId } from "@proto-kit/library";
+import { Balance, BalancesKey, TokenId } from "@proto-kit/library";
 import { Field, PublicKey, UInt64 } from "o1js";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { useChainStore } from "./chain";
 import { useWalletStore } from "./wallet";
-import { tokenId } from "./balances";
+
+// Minalia in-game tokens, internal to the Protokit appchain.
+// NOT the same as the Zeko mainnet tokens with the same names — bridge TBD.
+// Assigned arbitrary but stable TokenIds for consistent reference.
+export type MinaliaTokenSymbol = "ZARKIS" | "PLASM" | "WIRE" | "LICHEN" | "SPORE";
+
+export const MINALIA_TOKENS: { symbol: MinaliaTokenSymbol; tokenId: TokenId }[] = [
+  { symbol: "ZARKIS", tokenId: TokenId.from(1) },
+  { symbol: "PLASM",  tokenId: TokenId.from(2) },
+  { symbol: "WIRE",   tokenId: TokenId.from(3) },
+  { symbol: "LICHEN", tokenId: TokenId.from(4) },
+  { symbol: "SPORE",  tokenId: TokenId.from(5) },
+];
+
+export function tokenIdFor(symbol: MinaliaTokenSymbol): TokenId {
+  const entry = MINALIA_TOKENS.find((t) => t.symbol === symbol);
+  if (!entry) throw new Error(`Unknown Minalia token: ${symbol}`);
+  return entry.tokenId;
+}
 
 export interface DevelopmentYieldState {
   loading: boolean;
+  // address -> symbol -> balance string (raw, in nanounits)
+  tokenBalances: { [address: string]: { [symbol in MinaliaTokenSymbol]?: string } };
+  loadAllBalances: (client: Client, address: string) => Promise<void>;
   initialiseDev: (
     client: Client,
     address: string,
     devId: number,
+    yieldTokenSymbol: MinaliaTokenSymbol,
     baseYield: number,
     cycleLength: number,
   ) => Promise<PendingTransaction>;
@@ -40,12 +63,26 @@ function isPendingTransaction(
 }
 
 export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand/immer", never]]>(
-  immer(() => ({
+  immer((set) => ({
     loading: Boolean(false),
+    tokenBalances: {},
+    async loadAllBalances(client: Client, address: string) {
+      const pk = PublicKey.fromBase58(address);
+      const results: { [symbol in MinaliaTokenSymbol]?: string } = {};
+      for (const { symbol, tokenId } of MINALIA_TOKENS) {
+        const key = BalancesKey.from(tokenId, pk);
+        const balance = await client.query.runtime.Balances.balances.get(key);
+        results[symbol] = balance?.toString() ?? "0";
+      }
+      set((state) => {
+        state.tokenBalances[address] = results;
+      });
+    },
     async initialiseDev(
       client: Client,
       address: string,
       devId: number,
+      yieldTokenSymbol: MinaliaTokenSymbol,
       baseYield: number,
       cycleLength: number,
     ) {
@@ -57,7 +94,7 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
           Field(devId),
           sender,
           sender,
-          tokenId,
+          tokenIdFor(yieldTokenSymbol),
           // @ts-ignore
           Balance.from(baseYield * 1e9),
           UInt64.from(cycleLength),
@@ -113,18 +150,32 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
   })),
 );
 
+// Refresh all five balances each block.
+export const useObserveAllBalances = () => {
+  const client = useClientStore();
+  const chain = useChainStore();
+  const wallet = useWalletStore();
+  const dev = useDevelopmentYieldStore();
+
+  useEffect(() => {
+    if (!client.client || !wallet.wallet) return;
+    dev.loadAllBalances(client.client, wallet.wallet);
+  }, [client.client, chain.block?.height, wallet.wallet]);
+};
+
 export const useDevelopmentYield = () => {
   const client = useClientStore();
   const dev = useDevelopmentYieldStore();
   const wallet = useWalletStore();
 
   const initialiseDev = useCallback(
-    async (devId: number, baseYield: number, cycleLength: number) => {
+    async (devId: number, yieldTokenSymbol: MinaliaTokenSymbol, baseYield: number, cycleLength: number) => {
       if (!client.client || !wallet.wallet) return;
       const pending = await dev.initialiseDev(
         client.client,
         wallet.wallet,
         devId,
+        yieldTokenSymbol,
         baseYield,
         cycleLength,
       );
