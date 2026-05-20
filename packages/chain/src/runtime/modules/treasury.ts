@@ -6,6 +6,8 @@ import {
 import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance, TokenId } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Poseidon, Struct } from "o1js";
+import { inject } from "tsyringe";
+import { MinaliaPlayerLedger, LEDGER_KIND } from "./playerLedger";
 
 export const TREASURY_CLASS = {
   PLAYER: UInt64.from(1),
@@ -62,7 +64,9 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
   @state() public balances = StateMap.from<TreasuryKey, Balance>(TreasuryKey, Balance);
   @state() public supplies = StateMap.from<TokenId, SupplyState>(TokenId, SupplyState);
 
-  public constructor() {
+  public constructor(
+    @inject("MinaliaPlayerLedger") public ledger: MinaliaPlayerLedger,
+  ) {
     super();
   }
 
@@ -99,6 +103,17 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
       burned: supply.burned,
       cap: supply.cap,
     }));
+
+    // Ledger: credit on the recipient
+    await this.ledger.record(
+      key.treasuryClass,
+      key.keyHash,
+      key.tokenId,
+      amount,
+      Balance.from(0),
+      LEDGER_KIND.MINT,
+      this.network.block.height,
+    );
   }
 
   @runtimeMethod()
@@ -115,29 +130,26 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
       burned: supply.burned.add(amount),
       cap: supply.cap,
     }));
+
+    // Ledger: debit on the source
+    await this.ledger.record(
+      key.treasuryClass,
+      key.keyHash,
+      key.tokenId,
+      Balance.from(0),
+      amount,
+      LEDGER_KIND.BURN,
+      this.network.block.height,
+    );
   }
 
   @runtimeMethod()
-  public async credit(key: TreasuryKey, amount: Balance): Promise<void> {
-    const isDuelPot = key.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
-    const isZarkis = key.tokenId.equals(ZARKIS_TOKEN_ID);
-    assert(isDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
-
-    const existing = await this.balances.get(key);
-    const newBalance = existing.value.add(amount);
-    await this.balances.set(key, newBalance);
-  }
-
-  @runtimeMethod()
-  public async debit(key: TreasuryKey, amount: Balance): Promise<void> {
-    const existing = await this.balances.get(key);
-    const currentBal = existing.value;
-    assert(amount.lessThanOrEqual(currentBal), "Debit exceeds balance");
-    await this.balances.set(key, currentBal.sub(amount));
-  }
-
-  @runtimeMethod()
-  public async transfer(from: TreasuryKey, to: TreasuryKey, amount: Balance): Promise<void> {
+  public async transfer(
+    from: TreasuryKey,
+    to: TreasuryKey,
+    amount: Balance,
+    kind: UInt64,
+  ): Promise<void> {
     const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
     const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
     assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
@@ -150,5 +162,29 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
     const toExisting = await this.balances.get(to);
     const toBal = toExisting.value;
     await this.balances.set(to, toBal.add(amount));
+
+    const blockHeight = this.network.block.height;
+
+    // Ledger: debit on `from`
+    await this.ledger.record(
+      from.treasuryClass,
+      from.keyHash,
+      from.tokenId,
+      Balance.from(0),
+      amount,
+      kind,
+      blockHeight,
+    );
+
+    // Ledger: credit on `to`
+    await this.ledger.record(
+      to.treasuryClass,
+      to.keyHash,
+      to.tokenId,
+      amount,
+      Balance.from(0),
+      kind,
+      blockHeight,
+    );
   }
 }

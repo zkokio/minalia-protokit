@@ -1,4 +1,4 @@
-import { PrivateKey, UInt64 } from "o1js";
+import { PrivateKey, UInt64, Poseidon } from "o1js";
 import { Balance, TokenId } from "@proto-kit/library";
 import { buildNodeClient } from "../core/environments/node.config";
 import {
@@ -6,6 +6,7 @@ import {
   TREASURY_CLASS,
   ZARKIS_TOKEN_ID,
 } from "../runtime/modules/treasury";
+import { LEDGER_KIND } from "../runtime/modules/playerLedger";
 
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
@@ -45,6 +46,25 @@ async function main() {
     } : null;
   }
 
+  async function getLedgerNextIndex(): Promise<number> {
+    const n = await client.query.runtime.MinaliaPlayerLedger.nextIndex.get();
+    return Number(n?.toString() ?? "0");
+  }
+
+  async function getLedgerEntry(index: number) {
+    const e = await client.query.runtime.MinaliaPlayerLedger.entries.get(UInt64.from(index));
+    if (!e) return null;
+    return {
+      principalClass: e.principalClass.toString(),
+      principalHash: e.principalHash.toString(),
+      token: e.token.toString(),
+      credit: e.credit.toString(),
+      debit: e.debit.toString(),
+      kind: e.kind.toString(),
+      blockHeight: e.blockHeight.toString(),
+    };
+  }
+
   async function send(label: string, build: () => Promise<unknown>) {
     console.log(`→ ${label}`);
     const tx = await client.transaction(signerPub, build as any);
@@ -64,6 +84,13 @@ async function main() {
   const playerKey = TreasuryKey.fromPlayer(signerPub, ZARKIS_TOKEN_ID);
   const duelPotKey = TreasuryKey.fromDuelPot(ZARKIS_TOKEN_ID);
 
+  // Pre-compute principal hashes so we can check ledger entries against them
+  const playerPrincipalHash = Poseidon.hash(signerPub.toFields()).toString();
+  // DuelPot principalHash is Field(0) per TreasuryKey.fromDuelPot
+
+  const ledgerStart = await getLedgerNextIndex();
+  console.log(`Starting ledger nextIndex: ${ledgerStart}`);
+
   logStep("TEST 1: setSupplyCap(ZARKIS, 1000)");
   await send("setSupplyCap", async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(1000));
@@ -72,7 +99,7 @@ async function main() {
   console.log("  supply state:", supply1);
   if (!await expect("supply.cap", supply1?.cap ?? "null", "1000")) failures++;
 
-  logStep("TEST 2: mint 100 ZARKIS to player");
+  logStep("TEST 2: mint 100 ZARKIS to player (writes ledger entry)");
   await send("mint", async () => {
     await treasury.mint(playerKey, Balance.from(100));
   });
@@ -83,43 +110,60 @@ async function main() {
   if (!await expect("player balance", bal2, "100")) failures++;
   if (!await expect("supply.minted", sup2?.minted ?? "null", "100")) failures++;
 
-  logStep("TEST 3: debit 30 ZARKIS from player");
-  await send("debit", async () => {
-    await treasury.debit(playerKey, Balance.from(30));
-  });
-  const bal3 = await getBalance(playerKey);
-  console.log("  player balance:", bal3);
-  if (!await expect("player balance", bal3, "70")) failures++;
+  // Verify ledger entry for the mint
+  const mintEntry = await getLedgerEntry(ledgerStart);
+  console.log("  ledger entry:", mintEntry);
+  if (!await expect("ledger credit", mintEntry?.credit ?? "null", "100")) failures++;
+  if (!await expect("ledger debit", mintEntry?.debit ?? "null", "0")) failures++;
+  if (!await expect("ledger kind (MINT=1)", mintEntry?.kind ?? "null", "1")) failures++;
+  if (!await expect("ledger principalClass (PLAYER=1)", mintEntry?.principalClass ?? "null", "1")) failures++;
+  if (!await expect("ledger principalHash", mintEntry?.principalHash ?? "null", playerPrincipalHash)) failures++;
 
-  logStep("TEST 4: credit 50 ZARKIS to player");
-  await send("credit", async () => {
-    await treasury.credit(playerKey, Balance.from(50));
-  });
-  const bal4 = await getBalance(playerKey);
-  console.log("  player balance:", bal4);
-  if (!await expect("player balance", bal4, "120")) failures++;
-
-  logStep("TEST 5: transfer 20 ZARKIS player → DUEL-POT");
+  logStep("TEST 3: transfer 20 ZARKIS player → DUEL-POT (writes TWO ledger entries)");
   await send("transfer", async () => {
-    await treasury.transfer(playerKey, duelPotKey, Balance.from(20));
+    await treasury.transfer(playerKey, duelPotKey, Balance.from(20), LEDGER_KIND.DUEL_STAKE);
   });
-  const bal5p = await getBalance(playerKey);
-  const bal5d = await getBalance(duelPotKey);
-  console.log("  player balance:", bal5p);
-  console.log("  DUEL-POT balance:", bal5d);
-  if (!await expect("player balance", bal5p, "100")) failures++;
-  if (!await expect("DUEL-POT balance", bal5d, "20")) failures++;
+  const bal3p = await getBalance(playerKey);
+  const bal3d = await getBalance(duelPotKey);
+  console.log("  player balance:", bal3p);
+  console.log("  DUEL-POT balance:", bal3d);
+  if (!await expect("player balance", bal3p, "80")) failures++;
+  if (!await expect("DUEL-POT balance", bal3d, "20")) failures++;
 
-  logStep("TEST 6: burn 10 ZARKIS from player");
+  // Verify two ledger entries
+  const transferDebitEntry = await getLedgerEntry(ledgerStart + 1);
+  const transferCreditEntry = await getLedgerEntry(ledgerStart + 2);
+  console.log("  ledger entry (debit side):", transferDebitEntry);
+  console.log("  ledger entry (credit side):", transferCreditEntry);
+  if (!await expect("debit-side credit", transferDebitEntry?.credit ?? "null", "0")) failures++;
+  if (!await expect("debit-side debit", transferDebitEntry?.debit ?? "null", "20")) failures++;
+  if (!await expect("debit-side principalClass (PLAYER=1)", transferDebitEntry?.principalClass ?? "null", "1")) failures++;
+  if (!await expect("debit-side kind (DUEL_STAKE=12)", transferDebitEntry?.kind ?? "null", "12")) failures++;
+  if (!await expect("credit-side credit", transferCreditEntry?.credit ?? "null", "20")) failures++;
+  if (!await expect("credit-side debit", transferCreditEntry?.debit ?? "null", "0")) failures++;
+  if (!await expect("credit-side principalClass (DUEL_POT=4)", transferCreditEntry?.principalClass ?? "null", "4")) failures++;
+  if (!await expect("credit-side kind (DUEL_STAKE=12)", transferCreditEntry?.kind ?? "null", "12")) failures++;
+
+  logStep("TEST 4: burn 10 ZARKIS from player (writes ledger entry)");
   await send("burn", async () => {
     await treasury.burn(playerKey, Balance.from(10));
   });
-  const bal6 = await getBalance(playerKey);
-  const sup6 = await getSupply(ZARKIS_TOKEN_ID);
-  console.log("  player balance:", bal6);
-  console.log("  supply:", sup6);
-  if (!await expect("player balance", bal6, "90")) failures++;
-  if (!await expect("supply.burned", sup6?.burned ?? "null", "10")) failures++;
+  const bal4 = await getBalance(playerKey);
+  const sup4 = await getSupply(ZARKIS_TOKEN_ID);
+  console.log("  player balance:", bal4);
+  console.log("  supply:", sup4);
+  if (!await expect("player balance", bal4, "70")) failures++;
+  if (!await expect("supply.burned", sup4?.burned ?? "null", "10")) failures++;
+
+  const burnEntry = await getLedgerEntry(ledgerStart + 3);
+  console.log("  ledger entry:", burnEntry);
+  if (!await expect("ledger credit", burnEntry?.credit ?? "null", "0")) failures++;
+  if (!await expect("ledger debit", burnEntry?.debit ?? "null", "10")) failures++;
+  if (!await expect("ledger kind (BURN=2)", burnEntry?.kind ?? "null", "2")) failures++;
+
+  // Final check: ledger nextIndex should have advanced by 4 (mint + 2x transfer + burn)
+  const ledgerEnd = await getLedgerNextIndex();
+  if (!await expect("ledger nextIndex advanced by 4", String(ledgerEnd - ledgerStart), "4")) failures++;
 
   logStep("SUMMARY");
   if (failures === 0) {

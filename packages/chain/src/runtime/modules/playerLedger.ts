@@ -5,7 +5,7 @@ import {
 } from "@proto-kit/module";
 import { StateMap, State, state } from "@proto-kit/protocol";
 import { Balance, TokenId } from "@proto-kit/library";
-import { PublicKey, UInt64, Struct } from "o1js";
+import { Field, PublicKey, UInt64, Poseidon, Struct } from "o1js";
 
 export const LEDGER_KIND = {
   MINT: UInt64.from(1),
@@ -32,16 +32,45 @@ export const LEDGER_KIND = {
   GATE_YIELD: UInt64.from(22),
   BONUS: UInt64.from(23),
   INFLATION: UInt64.from(24),
+  TRANSFER: UInt64.from(25),
+} as const;
+
+// Mirrors TREASURY_CLASS in treasury.ts. Kept in sync by convention.
+export const PRINCIPAL_CLASS = {
+  PLAYER: UInt64.from(1),
+  MINISTER: UInt64.from(2),
+  KING_LUM: UInt64.from(3),
+  DUEL_POT: UInt64.from(4),
 } as const;
 
 export class LedgerEntry extends Struct({
-  player: PublicKey,
+  principalClass: UInt64,
+  principalHash: Field,
   token: TokenId,
   credit: Balance,
   debit: Balance,
   kind: UInt64,
   blockHeight: UInt64,
-}) {}
+}) {
+  static forPlayer(
+    player: PublicKey,
+    token: TokenId,
+    credit: Balance,
+    debit: Balance,
+    kind: UInt64,
+    blockHeight: UInt64,
+  ): LedgerEntry {
+    return new LedgerEntry({
+      principalClass: PRINCIPAL_CLASS.PLAYER,
+      principalHash: Poseidon.hash(player.toFields()),
+      token,
+      credit,
+      debit,
+      kind,
+      blockHeight,
+    });
+  }
+}
 
 @runtimeModule()
 export class MinaliaPlayerLedger extends RuntimeModule<unknown> {
@@ -54,7 +83,8 @@ export class MinaliaPlayerLedger extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async record(
-    player: PublicKey,
+    principalClass: UInt64,
+    principalHash: Field,
     token: TokenId,
     credit: Balance,
     debit: Balance,
@@ -65,7 +95,8 @@ export class MinaliaPlayerLedger extends RuntimeModule<unknown> {
     const index = indexResult.value;
 
     const entry = new LedgerEntry({
-      player,
+      principalClass,
+      principalHash,
       token,
       credit,
       debit,
