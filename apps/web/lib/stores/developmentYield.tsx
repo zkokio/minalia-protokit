@@ -8,9 +8,6 @@ import { useCallback, useEffect } from "react";
 import { useChainStore } from "./chain";
 import { useWalletStore } from "./wallet";
 
-// Minalia in-game tokens, internal to the Protokit appchain.
-// NOT the same as the Zeko mainnet tokens with the same names — bridge TBD.
-// Assigned arbitrary but stable TokenIds for consistent reference.
 export type MinaliaTokenSymbol = "ZARKIS" | "PLASM" | "WIRE" | "LICHEN" | "SPORE";
 
 export const MINALIA_TOKENS: { symbol: MinaliaTokenSymbol; tokenId: TokenId }[] = [
@@ -29,8 +26,7 @@ export function tokenIdFor(symbol: MinaliaTokenSymbol): TokenId {
 
 export interface DevelopmentYieldState {
   loading: boolean;
-  // address -> symbol -> balance string (raw, in nanounits)
-  tokenBalances: { [address: string]: { [symbol in MinaliaTokenSymbol]?: string } };
+  tokenBalances: { [address: string]: { [sym in MinaliaTokenSymbol]?: string } };
   loadAllBalances: (client: Client, address: string) => Promise<void>;
   initialiseDev: (
     client: Client,
@@ -68,7 +64,7 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
     tokenBalances: {},
     async loadAllBalances(client: Client, address: string) {
       const pk = PublicKey.fromBase58(address);
-      const results: { [symbol in MinaliaTokenSymbol]?: string } = {};
+      const results: { [sym in MinaliaTokenSymbol]?: string } = {};
       for (const { symbol, tokenId } of MINALIA_TOKENS) {
         const key = BalancesKey.from(tokenId, pk);
         const balance = await client.query.runtime.Balances.balances.get(key);
@@ -78,17 +74,9 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
         state.tokenBalances[address] = results;
       });
     },
-    async initialiseDev(
-      client: Client,
-      address: string,
-      devId: number,
-      yieldTokenSymbol: MinaliaTokenSymbol,
-      baseYield: number,
-      cycleLength: number,
-    ) {
+    async initialiseDev(client, address, devId, yieldTokenSymbol, baseYield, cycleLength) {
       const dev = client.runtime.resolve("DevelopmentYield");
       const sender = PublicKey.fromBase58(address);
-
       const tx = await client.transaction(sender, async () => {
         await dev.initialiseDev(
           Field(devId),
@@ -100,24 +88,14 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
           UInt64.from(cycleLength),
         );
       });
-
       await tx.sign();
       await tx.send();
-
       isPendingTransaction(tx.transaction);
       return tx.transaction;
     },
-    async updateDecisions(
-      client: Client,
-      address: string,
-      devId: number,
-      decisionA: number,
-      decisionB: number,
-      decisionC: number,
-    ) {
+    async updateDecisions(client, address, devId, decisionA, decisionB, decisionC) {
       const dev = client.runtime.resolve("DevelopmentYield");
       const sender = PublicKey.fromBase58(address);
-
       const tx = await client.transaction(sender, async () => {
         await dev.updateDecisions(
           Field(devId),
@@ -126,31 +104,25 @@ export const useDevelopmentYieldStore = create<DevelopmentYieldState, [["zustand
           UInt64.from(decisionC),
         );
       });
-
       await tx.sign();
       await tx.send();
-
       isPendingTransaction(tx.transaction);
       return tx.transaction;
     },
-    async tick(client: Client, address: string, devId: number) {
+    async tick(client, address, devId) {
       const dev = client.runtime.resolve("DevelopmentYield");
       const sender = PublicKey.fromBase58(address);
-
       const tx = await client.transaction(sender, async () => {
         await dev.tick(Field(devId));
       });
-
       await tx.sign();
       await tx.send();
-
       isPendingTransaction(tx.transaction);
       return tx.transaction;
     },
   })),
 );
 
-// Refresh all five balances each block.
 export const useObserveAllBalances = () => {
   const client = useClientStore();
   const chain = useChainStore();
@@ -171,14 +143,7 @@ export const useDevelopmentYield = () => {
   const initialiseDev = useCallback(
     async (devId: number, yieldTokenSymbol: MinaliaTokenSymbol, baseYield: number, cycleLength: number) => {
       if (!client.client || !wallet.wallet) return;
-      const pending = await dev.initialiseDev(
-        client.client,
-        wallet.wallet,
-        devId,
-        yieldTokenSymbol,
-        baseYield,
-        cycleLength,
-      );
+      const pending = await dev.initialiseDev(client.client, wallet.wallet, devId, yieldTokenSymbol, baseYield, cycleLength);
       wallet.addPendingTransaction(pending);
     },
     [client.client, wallet.wallet],
@@ -187,14 +152,7 @@ export const useDevelopmentYield = () => {
   const updateDecisions = useCallback(
     async (devId: number, a: number, b: number, c: number) => {
       if (!client.client || !wallet.wallet) return;
-      const pending = await dev.updateDecisions(
-        client.client,
-        wallet.wallet,
-        devId,
-        a,
-        b,
-        c,
-      );
+      const pending = await dev.updateDecisions(client.client, wallet.wallet, devId, a, b, c);
       wallet.addPendingTransaction(pending);
     },
     [client.client, wallet.wallet],
