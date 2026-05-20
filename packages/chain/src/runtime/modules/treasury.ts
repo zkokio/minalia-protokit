@@ -14,6 +14,8 @@ export const TREASURY_CLASS = {
   DUEL_POT: UInt64.from(4),
 } as const;
 
+export const ZARKIS_TOKEN_ID = TokenId.from(1);
+
 export class TreasuryKey extends Struct({
   treasuryClass: UInt64,
   keyHash: Field,
@@ -30,6 +32,20 @@ export class TreasuryKey extends Struct({
     return new TreasuryKey({
       treasuryClass: TREASURY_CLASS.MINISTER,
       keyHash: territoryHash,
+      tokenId,
+    });
+  }
+  static fromKingLum(areaHash: Field, tokenId: TokenId): TreasuryKey {
+    return new TreasuryKey({
+      treasuryClass: TREASURY_CLASS.KING_LUM,
+      keyHash: areaHash,
+      tokenId,
+    });
+  }
+  static fromDuelPot(tokenId: TokenId): TreasuryKey {
+    return new TreasuryKey({
+      treasuryClass: TREASURY_CLASS.DUEL_POT,
+      keyHash: Field(0),
       tokenId,
     });
   }
@@ -63,6 +79,10 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async mint(key: TreasuryKey, amount: Balance): Promise<void> {
+    const isDuelPot = key.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
+    const isZarkis = key.tokenId.equals(ZARKIS_TOKEN_ID);
+    assert(isDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
+
     const supplyResult = await this.supplies.get(key.tokenId);
     const supply = supplyResult.value;
 
@@ -99,6 +119,10 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async credit(key: TreasuryKey, amount: Balance): Promise<void> {
+    const isDuelPot = key.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
+    const isZarkis = key.tokenId.equals(ZARKIS_TOKEN_ID);
+    assert(isDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
+
     const existing = await this.balances.get(key);
     const newBalance = existing.value.add(amount);
     await this.balances.set(key, newBalance);
@@ -114,6 +138,10 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async transfer(from: TreasuryKey, to: TreasuryKey, amount: Balance): Promise<void> {
+    const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
+    const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
+    assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
+
     const fromExisting = await this.balances.get(from);
     const fromBal = fromExisting.value;
     assert(amount.lessThanOrEqual(fromBal), "Transfer exceeds source balance");
