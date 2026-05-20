@@ -35,12 +35,66 @@ export class TreasuryKey extends Struct({
   }
 }
 
+export class SupplyState extends Struct({
+  minted: Balance,
+  burned: Balance,
+  cap: Balance,
+}) {}
+
 @runtimeModule()
 export class MinaliaTreasury extends RuntimeModule<unknown> {
   @state() public balances = StateMap.from<TreasuryKey, Balance>(TreasuryKey, Balance);
+  @state() public supplies = StateMap.from<TokenId, SupplyState>(TokenId, SupplyState);
 
   public constructor() {
     super();
+  }
+
+  @runtimeMethod()
+  public async setSupplyCap(tokenId: TokenId, cap: Balance): Promise<void> {
+    const existing = await this.supplies.get(tokenId);
+    const current = existing.value;
+    await this.supplies.set(tokenId, new SupplyState({
+      minted: current.minted,
+      burned: current.burned,
+      cap,
+    }));
+  }
+
+  @runtimeMethod()
+  public async mint(key: TreasuryKey, amount: Balance): Promise<void> {
+    const supplyResult = await this.supplies.get(key.tokenId);
+    const supply = supplyResult.value;
+
+    const newMinted = supply.minted.add(amount);
+    const inCirculation = newMinted.sub(supply.burned);
+    assert(inCirculation.lessThanOrEqual(supply.cap), "Mint would exceed supply cap");
+
+    const existing = await this.balances.get(key);
+    const newBalance = existing.value.add(amount);
+    await this.balances.set(key, newBalance);
+
+    await this.supplies.set(key.tokenId, new SupplyState({
+      minted: newMinted,
+      burned: supply.burned,
+      cap: supply.cap,
+    }));
+  }
+
+  @runtimeMethod()
+  public async burn(key: TreasuryKey, amount: Balance): Promise<void> {
+    const existing = await this.balances.get(key);
+    const currentBal = existing.value;
+    assert(amount.lessThanOrEqual(currentBal), "Burn exceeds balance");
+    await this.balances.set(key, currentBal.sub(amount));
+
+    const supplyResult = await this.supplies.get(key.tokenId);
+    const supply = supplyResult.value;
+    await this.supplies.set(key.tokenId, new SupplyState({
+      minted: supply.minted,
+      burned: supply.burned.add(amount),
+      cap: supply.cap,
+    }));
   }
 
   @runtimeMethod()
