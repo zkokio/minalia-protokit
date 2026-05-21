@@ -7,6 +7,7 @@ import { DevelopmentYield } from "./modules/developmentYield";
 import { MinaliaTreasury } from "./modules/treasury";
 import { MinaliaLedger } from "./modules/ledger";
 import { MinaliaUnitRegistry } from "./modules/unitRegistry";
+import { MinaliaTax } from "./modules/tax";
 
 export const modules = VanillaRuntimeModules.with({
   Balances,
@@ -15,6 +16,7 @@ export const modules = VanillaRuntimeModules.with({
   MinaliaTreasury,
   MinaliaLedger,
   MinaliaUnitRegistry,
+  MinaliaTax,
 });
 
 export const config: ModulesConfig<typeof modules> = {
@@ -26,6 +28,7 @@ export const config: ModulesConfig<typeof modules> = {
   MinaliaTreasury: {},
   MinaliaLedger: {},
   MinaliaUnitRegistry: {},
+  MinaliaTax: {},
 };
 
 export default {
