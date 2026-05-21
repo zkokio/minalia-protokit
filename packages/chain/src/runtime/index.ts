@@ -5,14 +5,14 @@ import { Balances } from "./modules/balances";
 import { Withdrawals } from "./modules/withdrawals";
 import { DevelopmentYield } from "./modules/developmentYield";
 import { MinaliaTreasury } from "./modules/treasury";
-import { MinaliaPlayerLedger } from "./modules/playerLedger";
+import { MinaliaLedger } from "./modules/ledger";
 
 export const modules = VanillaRuntimeModules.with({
   Balances,
   Withdrawals,
   DevelopmentYield,
   MinaliaTreasury,
-  MinaliaPlayerLedger,
+  MinaliaLedger,
 });
 
 export const config: ModulesConfig<typeof modules> = {
@@ -22,7 +22,7 @@ export const config: ModulesConfig<typeof modules> = {
   Withdrawals: {},
   DevelopmentYield: {},
   MinaliaTreasury: {},
-  MinaliaPlayerLedger: {},
+  MinaliaLedger: {},
 };
 
 export default {

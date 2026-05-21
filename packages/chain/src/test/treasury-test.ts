@@ -6,7 +6,7 @@ import {
   TREASURY_CLASS,
   ZARKIS_TOKEN_ID,
 } from "../runtime/modules/treasury";
-import { LEDGER_KIND } from "../runtime/modules/playerLedger";
+import { LEDGER_KIND } from "../runtime/modules/ledger";
 
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
@@ -47,12 +47,12 @@ async function main() {
   }
 
   async function getLedgerNextIndex(): Promise<number> {
-    const n = await client.query.runtime.MinaliaPlayerLedger.nextIndex.get();
+    const n = await client.query.runtime.MinaliaLedger.nextIndex.get();
     return Number(n?.toString() ?? "0");
   }
 
   async function getLedgerEntry(index: number) {
-    const e = await client.query.runtime.MinaliaPlayerLedger.entries.get(UInt64.from(index));
+    const e = await client.query.runtime.MinaliaLedger.entries.get(UInt64.from(index));
     if (!e) return null;
     return {
       principalClass: e.principalClass.toString(),

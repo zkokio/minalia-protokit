@@ -73,7 +73,7 @@ export class LedgerEntry extends Struct({
 }
 
 @runtimeModule()
-export class MinaliaPlayerLedger extends RuntimeModule<unknown> {
+export class MinaliaLedger extends RuntimeModule<unknown> {
   @state() public entries = StateMap.from<UInt64, LedgerEntry>(UInt64, LedgerEntry);
   @state() public nextIndex = State.from<UInt64>(UInt64);
 

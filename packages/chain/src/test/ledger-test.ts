@@ -1,7 +1,7 @@
 import { PrivateKey, UInt64, Poseidon } from "o1js";
 import { Balance } from "@proto-kit/library";
 import { buildNodeClient } from "../core/environments/node.config";
-import { LEDGER_KIND, PRINCIPAL_CLASS } from "../runtime/modules/playerLedger";
+import { LEDGER_KIND, PRINCIPAL_CLASS } from "../runtime/modules/ledger";
 import { ZARKIS_TOKEN_ID } from "../runtime/modules/treasury";
 
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
@@ -26,15 +26,15 @@ async function main() {
   const client = buildNodeClient(signerKey, GRAPHQL_URL);
   await client.start();
 
-  const ledger = client.runtime.resolve("MinaliaPlayerLedger");
+  const ledger = client.runtime.resolve("MinaliaLedger");
 
   async function getNextIndex(): Promise<string> {
-    const n = await client.query.runtime.MinaliaPlayerLedger.nextIndex.get();
+    const n = await client.query.runtime.MinaliaLedger.nextIndex.get();
     return n?.toString() ?? "0";
   }
 
   async function getEntry(index: UInt64) {
-    const e = await client.query.runtime.MinaliaPlayerLedger.entries.get(index);
+    const e = await client.query.runtime.MinaliaLedger.entries.get(index);
     if (!e) return null;
     return {
       principalClass: e.principalClass.toString(),

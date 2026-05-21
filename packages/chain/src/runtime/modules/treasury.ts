@@ -7,7 +7,7 @@ import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance, TokenId } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
-import { MinaliaPlayerLedger, LEDGER_KIND } from "./playerLedger";
+import { MinaliaLedger, LEDGER_KIND } from "./ledger";
 
 export const TREASURY_CLASS = {
   PLAYER: UInt64.from(1),
@@ -65,7 +65,7 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
   @state() public supplies = StateMap.from<TokenId, SupplyState>(TokenId, SupplyState);
 
   public constructor(
-    @inject("MinaliaPlayerLedger") public ledger: MinaliaPlayerLedger,
+    @inject("MinaliaLedger") public ledger: MinaliaLedger,
   ) {
     super();
   }
