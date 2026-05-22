@@ -10,8 +10,6 @@ import { inject } from "tsyringe";
 import { MinaliaLedger, PRINCIPAL_CLASS } from "./ledger";
 import { ZARKIS_TOKEN_ID } from "./treasury";
 
-// New ledger kinds for unit lifecycle. Not money movements but worth logging
-// as audit events. Reuse the ledger as a generic event log with credit=0,debit=0.
 export const UNIT_EVENT_KIND = {
   REGISTERED: UInt64.from(100),
   TRANSFERRED: UInt64.from(101),
@@ -32,10 +30,53 @@ export class TerritoryState extends Struct({
   initialised: Bool,
 }) {}
 
-// Compute on-chain unit ID from a territory id + slot number.
-// Off-chain code uses the same formula to derive the key.
 export function unitIdFor(territoryId: Field, slot: UInt64): Field {
   return Poseidon.hash([territoryId, slot.value]);
+}
+
+// Intentionally NOT a @runtimeMethod. This helper performs the actual
+// ownership swap on a unit. It is only callable from inside another
+// @runtimeMethod that has already done its own access control (e.g.
+// UnitRegistry.transferUnit checks authority; Sales.buy checks listing
+// validity + payment). There is no chain-addressable path here — a user
+// transaction cannot invoke this function directly.
+//
+// Per the Protokit team's recommended pattern (May 2026) for module
+// composition: shared mutation lives in a plain helper, callers are
+// @runtimeMethods that gate their own entry.
+export async function performUnitTransfer(
+  units: StateMap<Field, UnitState>,
+  ledger: MinaliaLedger,
+  blockHeight: UInt64,
+  unitId: Field,
+  newOwner: PublicKey,
+): Promise<void> {
+  const result = await units.get(unitId);
+  assert(result.value.initialised, "Unit not registered");
+
+  const current = result.value;
+  await units.set(
+    unitId,
+    new UnitState({
+      owner: newOwner,
+      minister: current.minister,
+      territoryId: current.territoryId,
+      slot: current.slot,
+      // After any transfer the unit is no longer minister-held.
+      isMinisterHeld: Bool(false),
+      initialised: Bool(true),
+    }),
+  );
+
+  await ledger.record(
+    PRINCIPAL_CLASS.PLAYER,
+    Poseidon.hash(newOwner.toFields()),
+    ZARKIS_TOKEN_ID,
+    Balance.from(0),
+    Balance.from(0),
+    UNIT_EVENT_KIND.TRANSFERRED,
+    blockHeight,
+  );
 }
 
 @runtimeModule()
@@ -46,7 +87,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     TerritoryState,
   );
 
-  // Authority key controls all mutating methods. Set once via setAuthority.
   @state() public authority = State.from<PublicKey>(PublicKey);
   @state() public authorityInitialised = State.from<Bool>(Bool);
 
@@ -56,8 +96,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     super();
   }
 
-  // Called once during bootstrap. After this, only the holder of `key`
-  // can register units, transfer them, or assign ministers.
   @runtimeMethod()
   public async setAuthority(key: PublicKey): Promise<void> {
     const initResult = await this.authorityInitialised.get();
@@ -66,8 +104,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     await this.authorityInitialised.set(Bool(true));
   }
 
-  // Assert the tx signer matches the configured authority key.
-  // Note: this.transaction.sender is a PublicKeyOption; .value is the PublicKey.
   private async assertAuthority(): Promise<void> {
     const initResult = await this.authorityInitialised.get();
     assert(initResult.value, "Authority not initialised");
@@ -91,7 +127,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
       }),
     );
 
-    // Audit event in the ledger. Zero amounts; principal = the minister.
     await this.ledger.record(
       PRINCIPAL_CLASS.MINISTER,
       ministerHash,
@@ -112,7 +147,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
   ): Promise<void> {
     await this.assertAuthority();
 
-    // Territory must have been initialised so we know the minister.
     const territoryResult = await this.territories.get(territoryId);
     assert(
       territoryResult.value.initialised,
@@ -120,8 +154,6 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     );
 
     const unitId = unitIdFor(territoryId, slot);
-
-    // Refuse to overwrite an existing unit. Use transferUnit instead.
     const existingResult = await this.units.get(unitId);
     assert(
       existingResult.value.initialised.not(),
@@ -151,38 +183,21 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     );
   }
 
+  // Authority-gated direct transfer. Used at bootstrap or for admin
+  // actions. Player-driven transfers go through MinaliaSales.buy, which
+  // calls the same performUnitTransfer helper after its own validation.
   @runtimeMethod()
   public async transferUnit(
     unitId: Field,
     newOwner: PublicKey,
   ): Promise<void> {
     await this.assertAuthority();
-
-    const result = await this.units.get(unitId);
-    assert(result.value.initialised, "Unit not registered");
-
-    const current = result.value;
-    await this.units.set(
-      unitId,
-      new UnitState({
-        owner: newOwner,
-        minister: current.minister,
-        territoryId: current.territoryId,
-        slot: current.slot,
-        // A transferred unit is no longer minister-held by definition.
-        isMinisterHeld: Bool(false),
-        initialised: Bool(true),
-      }),
-    );
-
-    await this.ledger.record(
-      PRINCIPAL_CLASS.PLAYER,
-      Poseidon.hash(newOwner.toFields()),
-      ZARKIS_TOKEN_ID,
-      Balance.from(0),
-      Balance.from(0),
-      UNIT_EVENT_KIND.TRANSFERRED,
+    await performUnitTransfer(
+      this.units,
+      this.ledger,
       this.network.block.height,
+      unitId,
+      newOwner,
     );
   }
 }
