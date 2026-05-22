@@ -1,6 +1,6 @@
 # MINALIA on Protokit — Migration Plan
 
-*Draft. Living document. Update as decisions land.*
+*Living document. Update as decisions land.*
 
 ---
 
@@ -80,6 +80,28 @@ The line is **medium**: enough on-chain to make "on-chain game" mean something, 
 | MinaliaTreasury | done | Multi-class vaults, supply caps, mint/burn/transfer |
 | MinaliaLedger | done | Audit ledger for any principal, any token, any kind |
 | Treasury and Ledger wiring | done | Every money movement writes typed receipts |
+| MinaliaUnitRegistry | done | Ownership graph (units, territories), authority-gated. Exports `performUnitTransfer` shared helper |
+| MinaliaTax | done | Per-unit weekly tax with all-or-nothing debt accrual. First composed module |
+| MinaliaSales | done | Two-step marketplace (list/cancel/buy), 2% minister fee, stale-listing protection. First player-driven composed module |
+
+**Total: 89 assertions across 5 test scripts, all passing on a live chain.**
+
+---
+
+## Module composition: the established convention
+
+For modules that compose with each other, follow the **helper-function pattern** (Protokit team's recommended approach, May 2026):
+
+- Shared mutation logic lives in a plain async function (NOT decorated with `@runtimeMethod`).
+- Both modules' `@runtimeMethod`s call the helper.
+- Each `@runtimeMethod` does its own access control (authority check, ownership check, signature verification, etc).
+- The helper has no chain-addressable path, so no user transaction can invoke it directly.
+
+This was learned the hard way: the first Sales design tried to expose a method on UnitRegistry for Sales to call. Because `transaction.sender` inside Protokit is always the original tx signer (never "the calling module"), that approach left a hole where any user could craft a signed tx to the exposed method and bypass Sales' fee/payment logic.
+
+The helper-function pattern dissolves the problem: you can't address a plain function from a chain tx. It's just code.
+
+`unitRegistry.ts`'s `performUnitTransfer` is the reference example — see how `UnitRegistry.transferUnit` and `MinaliaSales.buy` both call it, each doing their own validation first.
 
 ---
 
@@ -87,55 +109,44 @@ The line is **medium**: enough on-chain to make "on-chain game" mean something, 
 
 Each module is one to a few sessions of work. Order matters: later modules read from earlier ones.
 
-1. **UnitRegistry** — the ownership graph
-   - units StateMap keyed by UnitId with owner, territoryId, ministerId
-   - territories StateMap keyed by TerritoryId with minister key
-   - Methods: registerUnit, transferUnit, assignMinister
-   - Foundation for nearly everything else.
+1. **DevelopmentRegistry** — per-unit dev/upgrade/architect tracking
+   - `developments: StateMap<DevId, DevelopmentState>` keyed by `Poseidon(unitId, devSlot)`
+   - Stores devType, upgradeLevel, architect, manager
+   - Methods: `registerDevelopment`, `upgradeDevelopment`, `transferArchitect`, `assignManager`
+   - DI/authority locked; reads from UnitRegistry to validate the unit exists
 
 2. **JobRegistry** — employment
-   - jobs StateMap keyed by JobId with employer, employee, role, wage
-   - Methods: offerJob, acceptJob, terminateJob
-   - Needed by wages, manager cycles.
+   - `jobs: StateMap<JobId, JobState>` with employer, employee, role, wage
+   - Methods: `offerJob`, `acceptJob`, `terminateJob`
+   - Needed by wages and manager cycles
 
-3. **Tax** — per-unit weekly tax
-   - Reads from UnitRegistry to find owner and minister
-   - Charges owner via treasury.transfer with kind=TAX
-   - Accrues debt if owner can't pay (decision from this session)
-   - Called by tax authority key on a schedule
-
-4. **Sales** — unit ownership transfer with payment
-   - Atomically: player A pays player B via treasury, UnitRegistry updates ownership
-   - Optional sale fee to minister
-   - Signed by buyer (or both sides via two-step listing/accept)
-
-5. **Yields v2** — development payouts
+3. **Yields v2** — development payouts
    - Replaces toy DevelopmentYield
    - Reads from UnitRegistry to find owner; uses Treasury for payouts; logs in Ledger
    - Manager share plus owner share split, configured per development
 
-6. **Wages** — minister/manager paying employed players
+4. **Wages** — minister/manager paying employed players
    - Reads from JobRegistry
    - Called on a schedule by authority key, or triggered by manager cycle
 
-7. **Manager Cycles** — cycle progression and decisions
+5. **Manager Cycles** — cycle progression and decisions
    - Tracks per-development cycle state
    - Resolves decisions at cycle boundaries
    - Triggers yields and wages
 
-8. **Leaderboard Payouts** — weekly ARKIS distribution
+6. **Leaderboard Payouts** — weekly ARKIS distribution
    - 2000/1200/700/300/100 ARKIS to top 5
    - Activity ranking still computed off-chain; payout authoritatively on-chain
    - Mon 08:00 UTC, called by authority key
 
-9. **Duels** — staking, escrow, payouts, refunds
+7. **Duels** — staking, escrow, payouts, refunds
    - Players stake into duel pot
    - Resolved by authority key (until automated resolution is possible)
    - Payouts and refunds go through Treasury with appropriate ledger kinds
 
-10. **Token Exchanges** — swaps between ARKIS / PLASM / WIRE / LICHEN / SPORE
-    - Rate config per token pair
-    - Fees go to a configured destination
+8. **Token Exchanges** — swaps between ARKIS / PLASM / WIRE / LICHEN / SPORE
+   - Rate config per token pair
+   - Fees go to a configured destination
 
 ---
 
@@ -145,7 +156,7 @@ These need decisions before or during the relevant module. Not blockers for the 
 
 - **Identity:** A playerId on-chain is a Mina PublicKey. How does that relate to MINALIA's existing user UUIDs in Supabase? Likely: Supabase users.id keeps the UUID, users.wallet_address is the canonical Mina key, all on-chain references use the key. Off-chain UUID becomes a display alias.
 
-- **Bootstrapping ownership:** When UnitRegistry launches, who owns what? Most likely: a one-time seed runtime method (callable only by deployer) that imports current Supabase ownership state. Then seed is renounced.
+- **Bootstrapping ownership:** When UnitRegistry launches in production, who owns what? Most likely: a one-time seed script that reads Supabase ownership state and calls `registerUnit` 320 times. Each call is one tx; ~5s per block on the dev chain = ~27 minutes for the full set.
 
 - **Migration strategy:** Per-module cutover (chain becomes source of truth one module at a time) vs. dual-write (Supabase plus chain in parallel until full migration). Per-module cutover is cleaner but requires care that nothing in Supabase mutates state the chain now owns.
 
@@ -172,7 +183,7 @@ These need decisions before or during the relevant module. Not blockers for the 
 
 ---
 
-## Operating principle for future sessions
+## Operating principles for future sessions
 
 When in doubt about whether something belongs on-chain:
 
@@ -185,9 +196,13 @@ When in doubt about scope:
 
 > Build the module that has the fewest dependencies first.
 
+When composing modules:
+
+> Shared mutation lives in a plain helper function, not a `@runtimeMethod`. Each runtime method does its own access control.
+
 When in doubt about correctness:
 
-> Test it on a live local chain before committing. Every tx should settle, every ledger entry should appear, every assertion should hold.
+> Write the adversarial tests *at design time*, not after. Then test on a live local chain before committing. Every tx should settle, every ledger entry should appear, every assertion should hold.
 
 ---
 
@@ -199,7 +214,8 @@ When in doubt about correctness:
 - **Principal** — the party a ledger entry concerns. Can be a player, minister, king, or duel pot.
 - **Treasury class** — the kind of vault: PLAYER, MINISTER, KING_LUM, DUEL_POT.
 - **Settle** — the chain confirming a transaction by including it in a block.
+- **Helper function** — a plain async function (no `@runtimeMethod` decorator) used to share mutation logic between modules without exposing a chain-callable entry point.
 
 ---
 
-*Last meaningful update: this session. Two foundational primitives (Treasury, Ledger) and their wiring are committed. Next planned module: UnitRegistry.*
+*Last update: five modules done (Treasury, Ledger, UnitRegistry, Tax, Sales). 89 test assertions passing. Helper-function composition pattern established and applied. Next planned: DevelopmentRegistry.*
