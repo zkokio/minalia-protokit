@@ -23,6 +23,7 @@
     "test:units": "node --loader ts-node/esm --experimental-vm-modules --experimental-wasm-modules --es-module-specifier-resolution=node ./src/test/unit-registry-test.ts",
     "test:tax": "node --loader ts-node/esm --experimental-vm-modules --experimental-wasm-modules --es-module-specifier-resolution=node ./src/test/tax-test.ts",
     "test:sales": "node --loader ts-node/esm --experimental-vm-modules --experimental-wasm-modules --es-module-specifier-resolution=node ./src/test/sales-test.ts",
+    "test:devs": "node --loader ts-node/esm --experimental-vm-modules --experimental-wasm-modules --es-module-specifier-resolution=node ./src/test/development-registry-test.ts",
     "build": "pnpm run prisma:generate && tsc -p tsconfig.json",
     "start": "pnpm run sequencer:start",
     "sequencer:start": "node --loader ts-node/esm --experimental-vm-modules --experimental-wasm-modules --es-module-specifier-resolution=node ./dist/start.js start \"./core/environments/$PROTOKIT_ENV_FOLDER/chain.config.js\" $1",
