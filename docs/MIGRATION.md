@@ -38,6 +38,7 @@ The line is **medium**: enough on-chain to make "on-chain game" mean something, 
 - **Treasuries** — player vaults, minister vaults, king vaults, duel pot
 - **Ledger** — every credit/debit with reason and block height
 - **Unit ownership** — who owns which unit, in which territory, under which minister
+- **Developments** — per-unit dev tracking: type, upgrade level, architect, manager
 - **Jobs / employment** — which player works for which minister or manager
 - **Tax** — weekly per-unit charge from owner to minister
 - **Yields** — development payouts and splits
@@ -83,8 +84,9 @@ The line is **medium**: enough on-chain to make "on-chain game" mean something, 
 | MinaliaUnitRegistry | done | Ownership graph (units, territories), authority-gated. Exports `performUnitTransfer` shared helper |
 | MinaliaTax | done | Per-unit weekly tax with all-or-nothing debt accrual. First composed module |
 | MinaliaSales | done | Two-step marketplace (list/cancel/buy), 2% minister fee, stale-listing protection. First player-driven composed module |
+| MinaliaDevelopmentRegistry | done | Per-unit dev tracking (devType, upgradeLevel, architect, manager). Cross-module unit existence check. 1-to-15 slot cap enforced on-chain |
 
-**Total: 89 assertions across 5 test scripts, all passing on a live chain.**
+**Total: 110 assertions across 6 test scripts, all passing on a live chain.**
 
 ---
 
@@ -109,30 +111,29 @@ The helper-function pattern dissolves the problem: you can't address a plain fun
 
 Each module is one to a few sessions of work. Order matters: later modules read from earlier ones.
 
-1. **DevelopmentRegistry** — per-unit dev/upgrade/architect tracking
-   - `developments: StateMap<DevId, DevelopmentState>` keyed by `Poseidon(unitId, devSlot)`
-   - Stores devType, upgradeLevel, architect, manager
-   - Methods: `registerDevelopment`, `upgradeDevelopment`, `transferArchitect`, `assignManager`
-   - DI/authority locked; reads from UnitRegistry to validate the unit exists
-
-2. **JobRegistry** — employment
+1. **JobRegistry** — employment
    - `jobs: StateMap<JobId, JobState>` with employer, employee, role, wage
    - Methods: `offerJob`, `acceptJob`, `terminateJob`
    - Needed by wages and manager cycles
 
-3. **Yields v2** — development payouts
+2. **Yields v2** — development payouts
    - Replaces toy DevelopmentYield
-   - Reads from UnitRegistry to find owner; uses Treasury for payouts; logs in Ledger
-   - Manager share plus owner share split, configured per development
+   - Reads from UnitRegistry + DevelopmentRegistry to find owner + architect + manager
+   - Uses Treasury for payouts; logs in Ledger
+   - Manager share + architect share + owner share split, configured per development type
 
-4. **Wages** — minister/manager paying employed players
+3. **Wages** — minister/manager paying employed players
    - Reads from JobRegistry
    - Called on a schedule by authority key, or triggered by manager cycle
 
-5. **Manager Cycles** — cycle progression and decisions
+4. **Manager Cycles** — cycle progression and decisions
    - Tracks per-development cycle state
    - Resolves decisions at cycle boundaries
    - Triggers yields and wages
+
+5. **Build** — players paying to construct new developments
+   - Buyer pays construction cost via Treasury; minister gets 5% fee
+   - Composes with DevelopmentRegistry's registerDevelopment via the helper pattern
 
 6. **Leaderboard Payouts** — weekly ARKIS distribution
    - 2000/1200/700/300/100 ARKIS to top 5
@@ -156,7 +157,7 @@ These need decisions before or during the relevant module. Not blockers for the 
 
 - **Identity:** A playerId on-chain is a Mina PublicKey. How does that relate to MINALIA's existing user UUIDs in Supabase? Likely: Supabase users.id keeps the UUID, users.wallet_address is the canonical Mina key, all on-chain references use the key. Off-chain UUID becomes a display alias.
 
-- **Bootstrapping ownership:** When UnitRegistry launches in production, who owns what? Most likely: a one-time seed script that reads Supabase ownership state and calls `registerUnit` 320 times. Each call is one tx; ~5s per block on the dev chain = ~27 minutes for the full set.
+- **Bootstrapping ownership:** When UnitRegistry launches in production, who owns what? Most likely: a one-time seed script that reads Supabase ownership state and calls `registerUnit` 320 times. Same for DevelopmentRegistry — seed the existing developments. Each call is one tx; ~5s per block on the dev chain.
 
 - **Migration strategy:** Per-module cutover (chain becomes source of truth one module at a time) vs. dual-write (Supabase plus chain in parallel until full migration). Per-module cutover is cleaner but requires care that nothing in Supabase mutates state the chain now owns.
 
@@ -168,9 +169,11 @@ These need decisions before or during the relevant module. Not blockers for the 
 
 - **Player UX during settlement:** A 5-15 second wait per action is fine for tax (background) but bad for a unit sale (foreground). Plan: optimistic UI in the client (show pending state), with reconciliation when the tx settles. Supabase notifications can drive the UI flip from "pending" to "confirmed".
 
-- **State explosion:** If the chain stores every unit, every job, every ledger entry, that's a lot of state. Protokit handles it, but performance characteristics over time are unknown. Worth monitoring as we scale.
+- **State explosion:** If the chain stores every unit, every job, every ledger entry, every development, that's a lot of state. Protokit handles it, but performance characteristics over time are unknown. Worth monitoring as we scale.
 
 - **Schema migrations:** Mid-testing, we can drop and rebuild chain state freely. Post-launch, schema changes are migrations. Plan for that before launch, not after.
+
+- **Dev type slug map:** Development types are stored on-chain as UInt64 codes. The slug-to-code mapping (`foundry=1, market=2, ...`) is maintained off-chain in Supabase. Display, lore, art, and balance config all live there. The chain just knows "type 7 is type 7."
 
 ---
 
@@ -215,7 +218,9 @@ When in doubt about correctness:
 - **Treasury class** — the kind of vault: PLAYER, MINISTER, KING_LUM, DUEL_POT.
 - **Settle** — the chain confirming a transaction by including it in a block.
 - **Helper function** — a plain async function (no `@runtimeMethod` decorator) used to share mutation logic between modules without exposing a chain-callable entry point.
+- **Architect** — the player who built a development. Gets a yield share.
+- **Manager** — the player currently managing a development. Gets a manager share, separate from the architect.
 
 ---
 
-*Last update: five modules done (Treasury, Ledger, UnitRegistry, Tax, Sales). 89 test assertions passing. Helper-function composition pattern established and applied. Next planned: DevelopmentRegistry.*
+*Last update: six modules done (Treasury, Ledger, UnitRegistry, Tax, Sales, DevelopmentRegistry). 110 test assertions passing. Helper-function composition pattern established and applied. Next planned: JobRegistry.*
