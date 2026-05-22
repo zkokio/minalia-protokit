@@ -17,6 +17,7 @@ This is a **snapshot** taken from a working dev branch for the Protokit team to 
 | `unitRegistry.ts` | On-chain ownership graph. Units keyed by `Poseidon(territoryId, slot)`. Territories store minister hashes. Authority-gated mutations. Exports `performUnitTransfer` as a shared helper. |
 | `tax.ts` | Per-unit weekly tax with all-or-nothing debt accrual. Composes `UnitRegistry` (read owner + minister) and `Treasury` (move the money). |
 | `sales.ts` | Two-step marketplace (`list`, `cancelListing`, `buy`). 2% fee deducted from seller proceeds, paid to the territory minister. Stale-listing protection. Composes `UnitRegistry` (via the shared helper) and `Treasury`. |
+| `developmentRegistry.ts` | Per-unit development tracking. Each dev keyed by `Poseidon(unitId, devSlot)` with type, upgrade level, architect, and manager fields. Cross-module check that the unit exists. 1-to-15 slot cap enforced on-chain. |
 
 ### Tests (`src/test/`)
 
@@ -29,8 +30,9 @@ End-to-end tests run against a local Protokit `inmemory` chain. Each test boots 
 | `unit-registry-test.ts` | 15 | setAuthority bootstrap, assignMinister, registerUnit (player-owned + minister-held), transferUnit, **adversarial: non-authority cannot register a unit** |
 | `tax-test.ts` | 11 | Happy path payment, debt accrual when player can't pay, multi-cycle accrual, full clearance when player gets funds |
 | `sales-test.ts` | 31 | 6 happy paths + 9 adversarial scenarios (intruder lists, intruder cancels, direct `transferUnit` call, insufficient buyer balance, double-spend, stale listing after authority transfer, minister-held listing, zero price, unlisted buy), plus a static design audit on ownership entry points |
+| `development-registry-test.ts` | 21 | 5 happy paths (register/upgrade/assignManager/transferArchitect/coexisting devs) + 8 adversarial scenarios (intruder mutations, register on missing unit, register on occupied slot, upgrade empty slot, out-of-range slot numbers) |
 
-**Total: 89 assertions, all passing on a live chain.**
+**Total: 110 assertions, all passing on a live chain.**
 
 ### Migration plan (`docs/MIGRATION.md`)
 
@@ -72,9 +74,19 @@ The `sales-test.ts` adversarial scenarios verify the security boundary: an intru
 
 `MinaliaLedger` records both money movements (credit/debit > 0) and ownership events (credit/debit = 0). The `kind` field disambiguates. Off-chain code scans the ledger and filters by `principalClass + principalHash` or `kind`.
 
+Kind ranges by domain:
+- 1–24: money movement kinds (MINT, BURN, TAX, YIELD, SALE, etc.)
+- 25: generic TRANSFER
+- 100–102: unit lifecycle (REGISTERED, TRANSFERRED, MINISTER_ASSIGNED)
+- 200–203: development lifecycle (REGISTERED, UPGRADED, ARCHITECT_TRANSFERRED, MANAGER_ASSIGNED)
+
 ### Authority pattern
 
 Every mutating registry/admin module has a `setAuthority` method that's set-once at bootstrap. After that, only the holder of that key can call mutating methods. Currently one key for testing; in production it'll be split per domain.
+
+### Cross-module reads
+
+Modules can read each other's state via `@inject` and StateMap access. For example, `MinaliaDevelopmentRegistry.registerDevelopment` asserts that the target unit exists in UnitRegistry by reading `this.unitRegistry.units.get(unitId)`. Same pattern used by Tax (looks up owner + minister) and Sales (looks up unit + minister, re-checks ownership at buy time).
 
 ### Block height
 
@@ -104,14 +116,15 @@ Sales applies a 2% fee via basis-points: `fee = price * 200 / 10000`. Integer di
 | ✅ | MinaliaUnitRegistry |
 | ✅ | MinaliaTax |
 | ✅ | MinaliaSales |
+| ✅ | MinaliaDevelopmentRegistry |
 
 | Planned | Module |
 |---|---|
-| | DevelopmentRegistry — per-unit dev/upgrade/architect tracking |
 | | JobRegistry — employment relationships |
+| | Yields v2 — replaces toy DevelopmentYield, reads from UnitRegistry + DevelopmentRegistry |
 | | Wages — minister/manager paying employed players |
-| | Yields v2 — replaces toy DevelopmentYield, reads from UnitRegistry |
 | | Manager Cycles |
+| | Build — players paying to construct new developments |
 | | Leaderboard Payouts |
 | | Duels |
 | | Token Exchanges |
