@@ -40,6 +40,48 @@ The roadmap: principle, what lives on-chain vs off-chain, modules planned in ord
 
 ---
 
+## Running these tests against a Protokit chain
+
+The tests in `src/test/` are node scripts that submit signed transactions to a live Protokit chain via GraphQL. They expect the chain to be running on `localhost:8080`.
+
+**Important:** start the chain process **directly with `node`** — not via `pnpm dev`. Running the chain through `pnpm dev` (which invokes `turbo run dev`) silently drops every transaction in our environment. The chain produces blocks normally but every block reports `0 txs`. No errors are logged. State reads return null. We hit this for several hours before realising the wrapper was the cause; details and a reproduction in [proto-kit/framework#519](https://github.com/proto-kit/framework/issues/519).
+
+To start the chain reliably:
+
+```bash
+cd packages/chain
+
+export PROTOKIT_ENV_FOLDER=inmemory
+export PROTOKIT_GRAPHQL_PORT=8080
+export PROTOKIT_TRANSACTION_FEE_RECIPIENT_PUBLIC_KEY=B62qqZ3Un6RFLTwQpwttcYqnX2AHBuLg7KmYqGWRz4hMMruq4mYDyGh
+
+nohup node \
+  --loader ts-node/esm \
+  --experimental-vm-modules \
+  --experimental-wasm-modules \
+  --es-module-specifier-resolution=node \
+  ./src/start.ts \
+  start ./core/environments/inmemory/chain.config.ts \
+  --logLevel debug \
+  > /tmp/protokit.log 2>&1 &
+```
+
+Wait until you see `Produced block #N (0 txs)` in `/tmp/protokit.log`, then run the tests:
+
+```bash
+cd packages/chain
+pnpm test:treasury     # 21 assertions
+pnpm test:ledger       # 11 assertions
+pnpm test:units        # 15 assertions
+pnpm test:tax          # 11 assertions
+pnpm test:sales        # 31 assertions
+pnpm test:devs         # 21 assertions
+```
+
+Each test boots its own node client(s), submits txs, and waits ~10 seconds per tx for settlement before checking state. The full suite takes about 30 minutes end-to-end.
+
+---
+
 ## How this fits into a Protokit project
 
 This repo contains only the MINALIA-specific files. In the actual codebase they live inside a Protokit starter at `packages/chain/src/runtime/modules/` alongside the starter's `Balances`, `Withdrawals`, and `DevelopmentYield` modules.
