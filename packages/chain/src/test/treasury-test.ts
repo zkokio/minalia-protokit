@@ -91,6 +91,11 @@ async function main() {
   const ledgerStart = await getLedgerNextIndex();
   console.log(`Starting ledger nextIndex: ${ledgerStart}`);
 
+  logStep("BOOTSTRAP: setAuthority");
+  await send("setAuthority", async () => {
+    await treasury.setAuthority(signerPub);
+  });
+
   logStep("TEST 1: setSupplyCap(ZARKIS, 1000)");
   await send("setSupplyCap", async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(1000));

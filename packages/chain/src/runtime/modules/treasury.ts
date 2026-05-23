@@ -96,6 +96,7 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async setSupplyCap(tokenId: TokenId, cap: Balance): Promise<void> {
+    await this.assertAuthority();
     const existing = await this.supplies.get(tokenId);
     const current = existing.value;
     await this.supplies.set(tokenId, new SupplyState({
