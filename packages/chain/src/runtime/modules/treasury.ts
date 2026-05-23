@@ -3,9 +3,9 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, assert, state } from "@proto-kit/protocol";
+import { StateMap, State, assert, state } from "@proto-kit/protocol";
 import { Balance, TokenId } from "@proto-kit/library";
-import { Field, PublicKey, UInt64, Poseidon, Struct } from "o1js";
+import { Field, PublicKey, UInt64, Bool, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
 import { MinaliaLedger, LEDGER_KIND } from "./ledger";
 
@@ -64,10 +64,34 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
   @state() public balances = StateMap.from<TreasuryKey, Balance>(TreasuryKey, Balance);
   @state() public supplies = StateMap.from<TokenId, SupplyState>(TokenId, SupplyState);
 
+  // Authority key for admin operations. Set once via setAuthority at bootstrap.
+  // NOTE: in step 1 these fields exist but no existing methods enforce the check.
+  // Subsequent steps gate setSupplyCap, mint, burn, and add forceTransfer.
+  @state() public authority = State.from<PublicKey>(PublicKey);
+  @state() public authorityInitialised = State.from<Bool>(Bool);
+
   public constructor(
     @inject("MinaliaLedger") public ledger: MinaliaLedger,
   ) {
     super();
+  }
+
+  @runtimeMethod()
+  public async setAuthority(key: PublicKey): Promise<void> {
+    const initResult = await this.authorityInitialised.get();
+    assert(initResult.value.not(), "Authority already initialised");
+    await this.authority.set(key);
+    await this.authorityInitialised.set(Bool(true));
+  }
+
+  // Private helper used by methods that need authority gating.
+  // Unused in step 1 — added now so step 2 can apply it to setSupplyCap.
+  private async assertAuthority(): Promise<void> {
+    const initResult = await this.authorityInitialised.get();
+    assert(initResult.value, "Authority not initialised");
+    const authResult = await this.authority.get();
+    const sender = this.transaction.sender.value;
+    assert(sender.equals(authResult.value), "Sender is not the authority");
   }
 
   @runtimeMethod()
