@@ -1,5 +1,6 @@
 import { Balance, VanillaRuntimeModules } from "@proto-kit/library";
 import { ModulesConfig } from "@proto-kit/common";
+import { PrivateKey, PublicKey } from "o1js";
 
 import { Balances } from "./modules/balances";
 import { Withdrawals } from "./modules/withdrawals";
@@ -10,6 +11,27 @@ import { MinaliaUnitRegistry } from "./modules/unitRegistry";
 import { MinaliaTax } from "./modules/tax";
 import { MinaliaSales } from "./modules/sales";
 import { MinaliaDevelopmentRegistry } from "./modules/developmentRegistry";
+
+// Authority public key for Treasury admin operations (mint, burn,
+// setSupplyCap, forceTransfer). Read from environment so no private key
+// is committed in source. The chain process and any test client must
+// share the same MINALIA_AUTHORITY_PRIVATE_KEY env var.
+//
+// In production, this is replaced with a key derived from a secret-
+// managed source (KMS, hardware wallet, etc).
+function readAuthorityPublicKey(): PublicKey {
+  const raw = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+  if (!raw) {
+    throw new Error(
+      "MINALIA_AUTHORITY_PRIVATE_KEY environment variable is not set. " +
+        "Generate a key with: node -e \"import('o1js').then(o1js => " +
+        "console.log(o1js.PrivateKey.random().toBase58()))\" and export it.",
+    );
+  }
+  return PrivateKey.fromBase58(raw).toPublicKey();
+}
+
+export const AUTHORITY_PUB = readAuthorityPublicKey();
 
 export const modules = VanillaRuntimeModules.with({
   Balances,
@@ -29,7 +51,9 @@ export const config: ModulesConfig<typeof modules> = {
   },
   Withdrawals: {},
   DevelopmentYield: {},
-  MinaliaTreasury: {},
+  MinaliaTreasury: {
+    authority: AUTHORITY_PUB,
+  },
   MinaliaLedger: {},
   MinaliaUnitRegistry: {},
   MinaliaTax: {},
