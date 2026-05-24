@@ -88,6 +88,12 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
   ): Promise<void> {
     await this.assertAuthority();
 
+    // Architect must be a real key, not the empty/null sentinel.
+    assert(
+      architect.equals(NO_MANAGER).not(),
+      "Architect cannot be the empty PublicKey",
+    );
+
     // Slot cap: refuse out-of-range slot numbers.
     assert(
       devSlot.lessThanOrEqual(MAX_DEVS_PER_UNIT),
@@ -175,6 +181,12 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
   ): Promise<void> {
     await this.assertAuthority();
 
+
+    // New architect must be a real key, not the empty/null sentinel.
+    assert(
+      newArchitect.equals(NO_MANAGER).not(),
+      "Architect cannot be the empty PublicKey",
+    );
     const result = await this.developments.get(devId);
     assert(result.value.initialised, "Development not registered");
 
