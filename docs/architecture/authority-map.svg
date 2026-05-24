@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 680 460" role="img" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title>MINALIA authority map: who can call what on each module</title>
+  <desc>Six modules and the access rules on their runtime methods. Treasury uses genesis-config authority. UnitRegistry, Tax, and DevelopmentRegistry still use the older setAuthority runtime method. Sales is purely player-driven with no authority.</desc>
+  <style>
+    .t  { font-size: 14px; font-weight: 400; fill: #444441; }
+    .ts { font-size: 12px; font-weight: 400; fill: #5F5E5A; }
+    .th { font-size: 14px; font-weight: 500; fill: #2C2C2A; }
+    .col-h { font-size: 13px; font-weight: 500; fill: #444441; letter-spacing: 0.02em; }
+    .amber-fill { fill: #FAEEDA; stroke: #BA7517; }
+    .amber-th   { fill: #633806; }
+    .amber-ts   { fill: #854F0B; }
+    .purple-fill{ fill: #EEEDFE; stroke: #534AB7; }
+    .purple-th  { fill: #3C3489; }
+    .purple-ts  { fill: #534AB7; }
+    .teal-fill  { fill: #E1F5EE; stroke: #0F6E56; }
+    .teal-th    { fill: #085041; }
+    .teal-ts    { fill: #0F6E56; }
+    .gray-fill  { fill: #F1EFE8; stroke: #5F5E5A; }
+    .gray-th    { fill: #2C2C2A; }
+    .gray-ts    { fill: #444441; }
+    .coral-fill { fill: #FAECE7; stroke: #993C1D; }
+    .coral-th   { fill: #712B13; }
+    .coral-ts   { fill: #993C1D; }
+  </style>
+
+  <text class="col-h" x="170" y="32" text-anchor="middle">Authority-only</text>
+  <text class="col-h" x="380" y="32" text-anchor="middle">Player-signed</text>
+  <text class="col-h" x="570" y="32" text-anchor="middle">Authority source</text>
+
+  <rect class="amber-fill" x="40" y="56" width="600" height="56" rx="8" stroke-width="0.5"/>
+  <text class="th amber-th" x="56" y="78">Treasury</text>
+  <text class="ts amber-ts" x="56" y="96">Money: vaults, supply caps, mint, burn</text>
+  <text class="ts" x="170" y="138" text-anchor="middle">mint, burn</text>
+  <text class="ts" x="170" y="154" text-anchor="middle">setSupplyCap, forceTransfer</text>
+  <text class="ts" x="380" y="138" text-anchor="middle">transfer</text>
+  <text class="ts" x="380" y="154" text-anchor="middle">(must own from-vault)</text>
+  <rect class="teal-fill" x="500" y="124" width="140" height="40" rx="6" stroke-width="0.5"/>
+  <text class="th teal-th" x="570" y="142" text-anchor="middle">Genesis config</text>
+  <text class="ts teal-ts" x="570" y="158" text-anchor="middle">env var, no race</text>
+
+  <rect class="purple-fill" x="40" y="184" width="600" height="56" rx="8" stroke-width="0.5"/>
+  <text class="th purple-th" x="56" y="206">UnitRegistry</text>
+  <text class="ts purple-ts" x="56" y="224">Ownership graph for units and territories</text>
+  <text class="ts" x="170" y="266" text-anchor="middle">setAuthority, assignMinister</text>
+  <text class="ts" x="170" y="282" text-anchor="middle">registerUnit, transferUnit</text>
+  <text class="ts" x="380" y="274" text-anchor="middle">(none)</text>
+  <rect class="gray-fill" x="500" y="252" width="140" height="40" rx="6" stroke-width="0.5"/>
+  <text class="th gray-th" x="570" y="270" text-anchor="middle">setAuthority</text>
+  <text class="ts gray-ts" x="570" y="286" text-anchor="middle">set-once at bootstrap</text>
+
+  <rect class="purple-fill" x="40" y="312" width="290" height="56" rx="8" stroke-width="0.5"/>
+  <text class="th purple-th" x="56" y="334">Tax</text>
+  <text class="ts purple-ts" x="56" y="352">chargeTax, setTaxConfig</text>
+  <rect class="purple-fill" x="350" y="312" width="290" height="56" rx="8" stroke-width="0.5"/>
+  <text class="th purple-th" x="366" y="334">DevelopmentRegistry</text>
+  <text class="ts purple-ts" x="366" y="352">register, upgrade, assignManager</text>
+
+  <rect class="coral-fill" x="40" y="396" width="600" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th coral-th" x="56" y="418">Sales (player-driven)</text>
+  <text class="ts coral-ts" x="56" y="436">list, cancelListing, buy &#8212; only seller can list or cancel their listing</text>
+</svg>

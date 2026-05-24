@@ -109,6 +109,8 @@ The included `src/test/*.ts` files use Protokit's `buildNodeClient` from `core/e
 
 ### Composition pattern (the headline learning)
 
+![Composition pattern](docs/architecture/composition.svg)
+
 Tax was the first composed module — it uses `tsyringe` `@inject` to call both `MinaliaTreasury` and `MinaliaUnitRegistry` from within its own `@runtimeMethod`s. This worked fine when all inter-module calls happen via authority-key-gated methods (tax cycles are admin-triggered).
 
 The real challenge came with Sales, a *player-driven* module that needs to mutate state owned by another module. When a player signs `Sales.buy(...)`, the `this.transaction.sender` inside any inter-module call is still that player — not "Sales the module." So a naive design that exposes `transferUnit` on UnitRegistry to other modules creates a hole: any user can craft a signed tx to that method directly and steal a unit. We tried that approach first, caught the gap, and asked.
@@ -133,6 +135,8 @@ Kind ranges by domain:
 - 200–203: development lifecycle (REGISTERED, UPGRADED, ARCHITECT_TRANSFERRED, MANAGER_ASSIGNED)
 
 ### Authority pattern
+
+![Authority map](docs/architecture/authority-map.svg)
 
 **Treasury** uses **genesis-config authority**: a `TreasuryConfig` interface declares `authority: PublicKey`, and `runtime/index.ts` reads `MINALIA_AUTHORITY_PRIVATE_KEY` from environment at chain startup, derives the public key, and threads it into the module's config. The chain has the authority key baked in from block 0. There is no `setAuthority` runtime method on Treasury and therefore no front-running race window where an attacker could claim the authority position before the legitimate operator.
 
