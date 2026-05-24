@@ -8,7 +8,7 @@ import {
 import { unitIdFor } from "../runtime/modules/unitRegistry";
 
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
-const SETTLE_MS = 10000;
+const SETTLE_MS = 20000;
 
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -107,6 +107,9 @@ async function main() {
 
   await send("UnitRegistry.setAuthority", authClient, authorityPub, async () => {
     await registry.setAuthority(authorityPub);
+  });
+  await send("Treasury.setAuthority", authClient, authorityPub, async () => {
+    await treasury.setAuthority(authorityPub);
   });
   await send("Treasury.setSupplyCap(ZARKIS, 1_000_000)", authClient, authorityPub, async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(1_000_000));

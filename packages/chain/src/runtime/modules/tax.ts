@@ -145,7 +145,7 @@ export class MinaliaTax extends RuntimeModule<unknown> {
     // Issue the transfer. When activeCharge == 0, Treasury writes two
     // zero-amount ledger entries — acceptable as an audit trail for "tax
     // cycle attempted, no payment due to insufficient balance".
-    await this.treasury.transfer(
+    await this.treasury.forceTransfer(
       ownerKey,
       ministerKey,
       activeCharge,

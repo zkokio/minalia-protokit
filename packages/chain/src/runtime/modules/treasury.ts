@@ -108,6 +108,7 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async mint(key: TreasuryKey, amount: Balance): Promise<void> {
+    await this.assertAuthority();
     const isDuelPot = key.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
     const isZarkis = key.tokenId.equals(ZARKIS_TOKEN_ID);
     assert(isDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
@@ -143,6 +144,7 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
 
   @runtimeMethod()
   public async burn(key: TreasuryKey, amount: Balance): Promise<void> {
+    await this.assertAuthority();
     const existing = await this.balances.get(key);
     const currentBal = existing.value;
     assert(amount.lessThanOrEqual(currentBal), "Burn exceeds balance");
@@ -175,6 +177,18 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
     amount: Balance,
     kind: UInt64,
   ): Promise<void> {
+    // Player-driven transfer: sender must own the `from` vault, and `from`
+    // must be a player vault (system vaults require forceTransfer).
+    assert(
+      from.treasuryClass.equals(TREASURY_CLASS.PLAYER),
+      "Only player vaults can be source of transfer; use forceTransfer",
+    );
+    const sender = this.transaction.sender.value;
+    const senderHash = Poseidon.hash(sender.toFields());
+    assert(
+      senderHash.equals(from.keyHash),
+      "Sender does not own the source vault",
+    );
     const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
     const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
     assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
@@ -202,6 +216,55 @@ export class MinaliaTreasury extends RuntimeModule<unknown> {
     );
 
     // Ledger: credit on `to`
+    await this.ledger.record(
+      to.treasuryClass,
+      to.keyHash,
+      to.tokenId,
+      amount,
+      Balance.from(0),
+      kind,
+      blockHeight,
+    );
+  }
+
+  // System-driven transfer. Sender must be the authority.
+  // Used for tax, wages, leaderboard payouts, and admin moves of money
+  // out of system vaults (minister/king/duel-pot) or out of player vaults
+  // without the player's signature (tax collection, etc).
+  @runtimeMethod()
+  public async forceTransfer(
+    from: TreasuryKey,
+    to: TreasuryKey,
+    amount: Balance,
+    kind: UInt64,
+  ): Promise<void> {
+    await this.assertAuthority();
+
+    const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
+    const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
+    assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
+
+    const fromExisting = await this.balances.get(from);
+    const fromBal = fromExisting.value;
+    assert(amount.lessThanOrEqual(fromBal), "Transfer exceeds source balance");
+    await this.balances.set(from, fromBal.sub(amount));
+
+    const toExisting = await this.balances.get(to);
+    const toBal = toExisting.value;
+    await this.balances.set(to, toBal.add(amount));
+
+    const blockHeight = this.network.block.height;
+
+    await this.ledger.record(
+      from.treasuryClass,
+      from.keyHash,
+      from.tokenId,
+      Balance.from(0),
+      amount,
+      kind,
+      blockHeight,
+    );
+
     await this.ledger.record(
       to.treasuryClass,
       to.keyHash,

@@ -97,6 +97,10 @@ async function main() {
     await tax.setAuthority(authorityPub);
   });
 
+  await send("Treasury.setAuthority", async () => {
+    await treasury.setAuthority(authorityPub);
+  });
+
   await send("Treasury.setSupplyCap(ZARKIS, 10000)", async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(10000));
   });
