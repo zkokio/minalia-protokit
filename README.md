@@ -12,12 +12,12 @@ This is a **snapshot** taken from a working dev branch for the Protokit team to 
 
 | Module | What it does |
 |---|---|
-| `treasury.ts` | Multi-class vaults (player, minister, king, duel-pot). Mint, burn, transfer. Per-token supply caps. |
-| `ledger.ts` | Append-only audit log keyed by global index. Every money movement and ownership event writes here, tagged with principal class, principal hash, token, credit, debit, kind, and block height. |
+| `treasury.ts` | Multi-class vaults (player, minister, king, duel-pot). Mint, burn, transfer, forceTransfer. Per-token supply caps. Authority configured at chain genesis via env var. |
+| `ledger.ts` | Append-only audit log keyed by global index. Every money movement and ownership event writes here, tagged with principal class, principal hash, token, credit, debit, kind, and block height. `record` is a plain helper, not chain-addressable. |
 | `unitRegistry.ts` | On-chain ownership graph. Units keyed by `Poseidon(territoryId, slot)`. Territories store minister hashes. Authority-gated mutations. Exports `performUnitTransfer` as a shared helper. |
-| `tax.ts` | Per-unit weekly tax with all-or-nothing debt accrual. Composes `UnitRegistry` (read owner + minister) and `Treasury` (move the money). |
+| `tax.ts` | Per-unit weekly tax with all-or-nothing debt accrual. Composes `UnitRegistry` (read owner + minister) and `Treasury` (move the money via `forceTransfer`). |
 | `sales.ts` | Two-step marketplace (`list`, `cancelListing`, `buy`). 2% fee deducted from seller proceeds, paid to the territory minister. Stale-listing protection. Composes `UnitRegistry` (via the shared helper) and `Treasury`. |
-| `developmentRegistry.ts` | Per-unit development tracking. Each dev keyed by `Poseidon(unitId, devSlot)` with type, upgrade level, architect, and manager fields. Cross-module check that the unit exists. 1-to-15 slot cap enforced on-chain. |
+| `developmentRegistry.ts` | Per-unit development tracking. Each dev keyed by `Poseidon(unitId, devSlot)` with type, upgrade level, architect, and manager fields. Cross-module check that the unit exists. 1-to-15 slot cap enforced on-chain. Empty PublicKey rejected as architect. |
 
 ### Tests (`src/test/`)
 
@@ -25,14 +25,15 @@ End-to-end tests run against a local Protokit `inmemory` chain. Each test boots 
 
 | Test | Assertions | Covers |
 |---|---|---|
-| `treasury-test.ts` | 21 | Supply caps, mint, burn, transfer (with `kind` param), automatic ledger entries on every movement |
-| `ledger-test.ts` | 11 | Record with each `LEDGER_KIND`, principal class round-trip, index advancement |
+| `treasury-test.ts` | 21 | Authority-gated mint/burn/setSupplyCap, sender-owns-from on transfer, forceTransfer for system moves, automatic ledger entries on every movement |
 | `unit-registry-test.ts` | 15 | setAuthority bootstrap, assignMinister, registerUnit (player-owned + minister-held), transferUnit, **adversarial: non-authority cannot register a unit** |
 | `tax-test.ts` | 11 | Happy path payment, debt accrual when player can't pay, multi-cycle accrual, full clearance when player gets funds |
 | `sales-test.ts` | 31 | 6 happy paths + 9 adversarial scenarios (intruder lists, intruder cancels, direct `transferUnit` call, insufficient buyer balance, double-spend, stale listing after authority transfer, minister-held listing, zero price, unlisted buy), plus a static design audit on ownership entry points |
-| `development-registry-test.ts` | 21 | 5 happy paths (register/upgrade/assignManager/transferArchitect/coexisting devs) + 8 adversarial scenarios (intruder mutations, register on missing unit, register on occupied slot, upgrade empty slot, out-of-range slot numbers) |
+| `development-registry-test.ts` | 21 | 5 happy paths (register/upgrade/assignManager/transferArchitect/coexisting devs) + 8 adversarial scenarios (intruder mutations, register on missing unit, register on occupied slot, upgrade empty slot, out-of-range slot numbers, empty-PublicKey architect rejected) |
 
-**Total: 110 assertions, all passing on a live chain.**
+**Total: 99 assertions, all passing on a live chain.**
+
+The ledger is covered indirectly by every test (treasury writes MINT/BURN/TRANSFER, sales writes SALE/SALE_FEE, tax writes TAX, unit/dev writes ownership and lifecycle events). After fix #3, `ledger.record` is no longer chain-callable, so there is no longer a dedicated direct-write test for it.
 
 ### Migration plan (`docs/MIGRATION.md`)
 
@@ -44,7 +45,17 @@ The roadmap: principle, what lives on-chain vs off-chain, modules planned in ord
 
 The tests in `src/test/` are node scripts that submit signed transactions to a live Protokit chain via GraphQL. They expect the chain to be running on `localhost:8080`.
 
-**Important:** start the chain process **directly with `node`** — not via `pnpm dev`. Running the chain through `pnpm dev` (which invokes `turbo run dev`) silently drops every transaction in our environment. The chain produces blocks normally but every block reports `0 txs`. No errors are logged. State reads return null. We hit this for several hours before realising the wrapper was the cause; details and a reproduction in [proto-kit/framework#519](https://github.com/proto-kit/framework/issues/519).
+**Important #1: start the chain directly with `node` — not via `pnpm dev`.** Running the chain through `pnpm dev` (which invokes `turbo run dev`) silently drops every transaction in our environment. The chain produces blocks normally but every block reports `0 txs`. No errors are logged. State reads return null. We hit this for several hours before realising the wrapper was the cause; details and a reproduction in [proto-kit/framework#519](https://github.com/proto-kit/framework/issues/519).
+
+**Important #2: `MINALIA_AUTHORITY_PRIVATE_KEY` env var is required.** Treasury's authority key (for `mint`, `burn`, `setSupplyCap`, `forceTransfer`) is baked into the chain at genesis from this env var rather than set via a runtime `setAuthority` call. Both the chain process and every test client must use the same value.
+
+Generate a key for development:
+
+```bash
+cd packages/chain && node -e "import('o1js').then(o1js => { const k = o1js.PrivateKey.random(); console.log('private:', k.toBase58()); console.log('public:', k.toPublicKey().toBase58()); });"
+```
+
+Save the private key somewhere (a `.env.local` not committed to git is fine). You'll export it any time you start the chain or run tests.
 
 To start the chain reliably:
 
@@ -54,6 +65,7 @@ cd packages/chain
 export PROTOKIT_ENV_FOLDER=inmemory
 export PROTOKIT_GRAPHQL_PORT=8080
 export PROTOKIT_TRANSACTION_FEE_RECIPIENT_PUBLIC_KEY=B62qqZ3Un6RFLTwQpwttcYqnX2AHBuLg7KmYqGWRz4hMMruq4mYDyGh
+export MINALIA_AUTHORITY_PRIVATE_KEY=<your generated private key>
 
 nohup node \
   --loader ts-node/esm \
@@ -66,19 +78,20 @@ nohup node \
   > /tmp/protokit.log 2>&1 &
 ```
 
-Wait until you see `Produced block #N (0 txs)` in `/tmp/protokit.log`, then run the tests:
+Wait until you see `Produced block #N (0 txs)` in `/tmp/protokit.log`, then run the tests (in the same shell, so they inherit `MINALIA_AUTHORITY_PRIVATE_KEY`):
 
 ```bash
 cd packages/chain
 pnpm test:treasury     # 21 assertions
-pnpm test:ledger       # 11 assertions
 pnpm test:units        # 15 assertions
 pnpm test:tax          # 11 assertions
 pnpm test:sales        # 31 assertions
 pnpm test:devs         # 21 assertions
 ```
 
-Each test boots its own node client(s), submits txs, and waits ~10 seconds per tx for settlement before checking state. The full suite takes about 30 minutes end-to-end.
+**Important #3: the chain must be restarted between test runs.** `setAuthority` is set-once for UnitRegistry, Tax, and DevelopmentRegistry (Treasury's is in genesis config now, so it has no setAuthority). Running multiple tests against the same chain without restarting causes "Authority already initialised" failures.
+
+Each test boots its own node client(s), submits txs, and waits 10–20 seconds per tx for settlement before checking state. The full suite takes about 30–40 minutes end-to-end.
 
 ---
 
@@ -102,13 +115,10 @@ The real challenge came with Sales, a *player-driven* module that needs to mutat
 
 **The Protokit team's recommended pattern** (May 2026, via question): when module A needs to mutate state owned by B and only A should drive it, do *not* add a second `@runtimeMethod` on B for A to call. Instead, **extract the shared mutation logic into a plain (non-`@runtimeMethod`) helper function** that both modules' `@runtimeMethod`s call. Each `@runtimeMethod` does its own access control; the helper is just code, not externally callable.
 
-Applied here:
+Applied in two places:
 
-- `unitRegistry.ts` exports `performUnitTransfer(units, ledger, blockHeight, unitId, newOwner)` — a plain async function, intentionally not decorated.
-- `UnitRegistry.transferUnit` does `assertAuthority()`, then calls the helper.
-- `MinaliaSales.buy` validates the listing + buyer payment, then calls the same helper, passing `this.registry.units` and `this.registry.ledger`.
-
-Result: only three `@runtimeMethod`s mutate the `units` StateMap's `owner` field — `registerUnit`, `transferUnit`, `buy` — and each enforces its own access controls. The shared helper has no chain-addressable path.
+- `unitRegistry.ts` exports `performUnitTransfer(units, ledger, blockHeight, unitId, newOwner)` — a plain async function, intentionally not decorated. Both `UnitRegistry.transferUnit` and `MinaliaSales.buy` call it.
+- `ledger.ts`'s `record` method was demoted from `@runtimeMethod` to plain. Modules call it via `@inject` exactly as before, but it has no chain-addressable path so it cannot be invoked by a hostile signed tx.
 
 The `sales-test.ts` adversarial scenarios verify the security boundary: an intruder cannot list someone else's unit, cancel someone else's listing, call `transferUnit` directly, buy without funds, double-spend a listing, exploit a stale listing, list a minister-held unit, list at zero price, or buy an unlisted unit. All blocked.
 
@@ -124,7 +134,22 @@ Kind ranges by domain:
 
 ### Authority pattern
 
-Every mutating registry/admin module has a `setAuthority` method that's set-once at bootstrap. After that, only the holder of that key can call mutating methods. Currently one key for testing; in production it'll be split per domain.
+**Treasury** uses **genesis-config authority**: a `TreasuryConfig` interface declares `authority: PublicKey`, and `runtime/index.ts` reads `MINALIA_AUTHORITY_PRIVATE_KEY` from environment at chain startup, derives the public key, and threads it into the module's config. The chain has the authority key baked in from block 0. There is no `setAuthority` runtime method on Treasury and therefore no front-running race window where an attacker could claim the authority position before the legitimate operator.
+
+```typescript
+interface TreasuryConfig { authority: PublicKey; }
+
+@runtimeModule()
+export class MinaliaTreasury extends RuntimeModule<TreasuryConfig> {
+  private async assertAuthority(): Promise<void> {
+    const sender = this.transaction.sender.value;
+    assert(sender.equals(this.config.authority), "Sender is not the authority");
+  }
+  // ...
+}
+```
+
+**UnitRegistry, Tax, and DevelopmentRegistry** still use the older **set-once `setAuthority` pattern**: a `@runtimeMethod setAuthority(key)` that's gated by a `Bool` "initialised" flag. After the first call, subsequent calls fail. Less secure than genesis-config (an attacker could in principle front-run a fresh chain's bootstrap) but functionally fine for testing. Migration of these modules to genesis-config is planned.
 
 ### Cross-module reads
 
@@ -137,6 +162,12 @@ Real block height read inside any `@runtimeMethod` via `this.network.block.heigh
 ### Fee math
 
 Sales applies a 2% fee via basis-points: `fee = price * 200 / 10000`. Integer division truncates toward zero; for small odd prices this rounds slightly in favour of the seller (a 99-ARKIS sale yields 98 to seller, 1 to minister, instead of 97.02/1.98). Negligible at typical denominations. The trade-off is acknowledged in the test (`H5`).
+
+### Treasury transfer vs forceTransfer
+
+`transfer` is for **player-driven** moves: the sender must own the `from` vault, and `from` must be a player vault. System vaults (minister, king, duel-pot) cannot be the source. Used in Sales for the buyer-pays-seller leg.
+
+`forceTransfer` is for **system-driven** moves: only the authority can call it, and the `from` vault can be any class. Used in Tax for collecting from a player's vault into the minister vault, and reserved for wages, leaderboard payouts, and admin moves.
 
 ---
 
