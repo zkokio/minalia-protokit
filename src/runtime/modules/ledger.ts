@@ -1,6 +1,5 @@
 import {
   runtimeModule,
-  runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
 import { StateMap, State, state } from "@proto-kit/protocol";
@@ -81,7 +80,6 @@ export class MinaliaLedger extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
   public async record(
     principalClass: UInt64,
     principalHash: Field,

@@ -11,6 +11,12 @@ import { LEDGER_KIND } from "../runtime/modules/ledger";
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
+const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+if (!AUTHORITY_PRIVATE_KEY) {
+  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+  process.exit(1);
+}
+
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -22,9 +28,10 @@ function logStep(label: string) {
 }
 
 async function main() {
-  const signerKey = PrivateKey.random();
+  // Authority key from env (same key the chain has in genesis config).
+  const signerKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
   const signerPub = signerKey.toPublicKey();
-  console.log("Test signer:", signerPub.toBase58());
+  console.log("Test signer (authority):", signerPub.toBase58());
   console.log(`Settle wait per tx: ${SETTLE_MS / 1000}s`);
 
   const client = buildNodeClient(signerKey, GRAPHQL_URL);
@@ -86,10 +93,11 @@ async function main() {
 
   // Pre-compute principal hashes so we can check ledger entries against them
   const playerPrincipalHash = Poseidon.hash(signerPub.toFields()).toString();
-  // DuelPot principalHash is Field(0) per TreasuryKey.fromDuelPot
 
   const ledgerStart = await getLedgerNextIndex();
   console.log(`Starting ledger nextIndex: ${ledgerStart}`);
+
+  // No setAuthority bootstrap needed — authority is baked into chain genesis.
 
   logStep("TEST 1: setSupplyCap(ZARKIS, 1000)");
   await send("setSupplyCap", async () => {

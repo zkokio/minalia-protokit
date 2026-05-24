@@ -12,6 +12,12 @@ import {
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
+const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+if (!AUTHORITY_PRIVATE_KEY) {
+  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+  process.exit(1);
+}
+
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -23,10 +29,11 @@ function logStep(label: string) {
 }
 
 async function main() {
-  // The authority key owns everything: Treasury supply caps, Unit registration,
-  // Tax config + chargeTax calls. Real deployments would split these, but for
-  // a test one key keeps the script simple.
-  const authorityKey = PrivateKey.random();
+  // Authority key from env — same key the chain uses in genesis config.
+  // For Tax/UnitRegistry, they still use their own setAuthority calls
+  // (those modules haven't been migrated to genesis-config yet).
+  // For Treasury, the authority is baked in at chain genesis.
+  const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
   const authorityPub = authorityKey.toPublicKey();
 
   const playerKey = PrivateKey.random();
@@ -84,11 +91,10 @@ async function main() {
   let failures = 0;
 
   // ── SETUP ─────────────────────────────────────────────────────
-  // Bootstrap: authority key for all three modules. Treasury doesn't have
-  // an authority (anyone can mint/burn currently — fine for testing).
+  logStep("SETUP: bootstrap UnitRegistry + Tax authority + supply cap + register unit");
 
-  logStep("SETUP: bootstrap authorities + supply cap + register unit");
-
+  // UnitRegistry and Tax still use the setAuthority pattern.
+  // Treasury authority is in genesis config — no setAuthority call needed.
   await send("UnitRegistry.setAuthority", async () => {
     await registry.setAuthority(authorityPub);
   });
@@ -114,7 +120,6 @@ async function main() {
   });
 
   // ── TEST 1: happy path ────────────────────────────────────────
-  // Mint 100 to player; charge tax; expect player=70, minister=30, debt=0.
   logStep("TEST 1: Happy path — player can afford tax");
 
   await send("mint 100 to player", async () => {
@@ -141,8 +146,6 @@ async function main() {
   if (!await expect("debt", debtAfter, "0")) failures++;
 
   // ── TEST 2: debt accrual when player can't pay ────────────────
-  // Burn most of player's balance so they can't afford next cycle's tax.
-  // Then charge tax; expect no transfer, debt += 30.
   logStep("TEST 2: Debt accrual — player can't afford tax");
 
   await send("burn 65 from player (leaves 5)", async () => {
@@ -167,7 +170,6 @@ async function main() {
   if (!await expect("debt accrued to 30", debtAfterT2, "30")) failures++;
 
   // ── TEST 3: debt grows again next cycle ───────────────────────
-  // Player still can't afford. Debt should now be 60 (previous 30 + new 30).
   logStep("TEST 3: Debt accumulates over consecutive failed cycles");
 
   await send("Tax.chargeTax(unit) — should accrue again", async () => {
@@ -181,8 +183,6 @@ async function main() {
   if (!await expect("player balance still 5", balAfterT3, "5")) failures++;
 
   // ── TEST 4: pay everything when balance is restored ───────────
-  // Mint 100 to player (now they have 105). Next cycle wants debt(60)+amount(30)=90.
-  // They can afford it. Expect: player=15, minister=120, debt=0.
   logStep("TEST 4: Player gets funds, pays debt + current cycle");
 
   await send("mint 100 to player", async () => {

@@ -8,7 +8,13 @@ import {
 import { unitIdFor } from "../runtime/modules/unitRegistry";
 
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
-const SETTLE_MS = 10000;
+const SETTLE_MS = 20000;
+
+const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+if (!AUTHORITY_PRIVATE_KEY) {
+  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+  process.exit(1);
+}
 
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -21,8 +27,9 @@ function logStep(label: string) {
 }
 
 async function main() {
-  // Keys
-  const authorityKey = PrivateKey.random();
+  // Authority key from env — Treasury authority is in genesis config.
+  // UnitRegistry still uses setAuthority pattern.
+  const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
   const authorityPub = authorityKey.toPublicKey();
   const aliceKey = PrivateKey.random();
   const alicePub = aliceKey.toPublicKey();
@@ -105,6 +112,7 @@ async function main() {
   // ── BOOTSTRAP ──────────────────────────────────────────────────
   logStep("BOOTSTRAP: authority + supply + territory + funding");
 
+  // UnitRegistry still uses setAuthority. Treasury authority is in genesis config.
   await send("UnitRegistry.setAuthority", authClient, authorityPub, async () => {
     await registry.setAuthority(authorityPub);
   });
@@ -115,24 +123,9 @@ async function main() {
     await registry.assignMinister(TERRITORY_ID, MINISTER_HASH);
   });
 
-  // Register units for the various tests. Slots:
-  //   1 → H1 basic sale
-  //   2 → H2 cancellation, H3 re-list
-  //   3 → H4 large round price
-  //   4 → H5 odd price (rounding)
-  //   5, 6 → H6 multiple simultaneous listings (Alice owns both)
-  //   7 → A1 (intruder lists)
-  //   8 → A2 (intruder cancels)
-  //   9 → A4 (intruder calls transferUnit)
-  //   10 → A5 (bob can't pay)
-  //   11 → A6 (double-spend)
-  //   12 → A7 (stale listing — authority transfers mid-listing)
-  //   13 → A8 (minister-held)
-  //   14 → A9 (zero price)
-  //   15 → A10 (buy unlisted)
+  // Register units for the various tests.
   for (let s = 1; s <= 15; s++) {
     const slot = UInt64.from(s);
-    // Slot 13 is the minister-held unit for A8.
     const isMinHeld = s === 13 ? Bool(true) : Bool(false);
     await send(`UnitRegistry.registerUnit slot ${s}`, authClient, authorityPub, async () => {
       await registry.registerUnit(TERRITORY_ID, slot, alicePub, isMinHeld);
@@ -152,7 +145,6 @@ async function main() {
   await send("mint 2000 to Charlie", authClient, authorityPub, async () => {
     await treasury.mint(charlieVault, Balance.from(2000));
   });
-  // Intentionally do NOT fund Intruder (A1, A2, A4 attacks don't need money).
 
   // ── HAPPY PATHS ────────────────────────────────────────────────
 
@@ -163,7 +155,6 @@ async function main() {
   const bobSales = bobClient.runtime.resolve("MinaliaSales");
   const charlieSales = charlieClient.runtime.resolve("MinaliaSales");
 
-  // Snapshot balances before
   const aliceBalBefore = Number(await getBalance(aliceVault));
   const bobBalBefore = Number(await getBalance(bobVault));
   const ministerBalBefore = Number(await getBalance(ministerVault));
@@ -245,7 +236,6 @@ async function main() {
     await bobSales.buy(u4);
   });
 
-  // fee = 99 * 200 / 10000 = 1 (integer division). Alice gets 98, minister gets 1.
   if (!await expect("Alice gained 98 (rounding favours seller)", String(Number(await getBalance(aliceVault)) - aliceBalBeforeH5), "98")) failures++;
   if (!await expect("Minister gained 1", String(Number(await getBalance(ministerVault)) - ministerBalBeforeH5), "1")) failures++;
 
@@ -270,7 +260,6 @@ async function main() {
 
   // ── ATTACK TESTS ───────────────────────────────────────────────
 
-  // A1: Intruder lists Alice's slot 7
   logStep("A1: ATTACK — Intruder tries to list Alice's slot 7");
   const u7 = unitIdFor(TERRITORY_ID, UInt64.from(7));
   const intruderSales = intruderClient.runtime.resolve("MinaliaSales");
@@ -282,7 +271,6 @@ async function main() {
   if (!await expect("No active listing for slot 7", String(u7Listing?.active ?? "false"), "false")) failures++;
   if (!await expect("Alice still owns slot 7", await getUnitOwner(u7), alicePub.toBase58())) failures++;
 
-  // A2: Intruder cancels Alice's listing on slot 8
   logStep("A2: ATTACK — Intruder tries to cancel Alice's listing on slot 8");
   const u8 = unitIdFor(TERRITORY_ID, UInt64.from(8));
   await send("Alice lists slot 8 for 500 (legit)", aliceClient, alicePub, async () => {
@@ -293,7 +281,6 @@ async function main() {
   });
   if (!await expect("Slot 8 listing STILL active after intruder", String((await getListing(u8))?.active ?? "null"), "true")) failures++;
 
-  // A4: Intruder calls UnitRegistry.transferUnit directly
   logStep("A4: ATTACK — Intruder calls UnitRegistry.transferUnit directly");
   const u9 = unitIdFor(TERRITORY_ID, UInt64.from(9));
   const intruderRegistry = intruderClient.runtime.resolve("MinaliaUnitRegistry");
@@ -302,7 +289,6 @@ async function main() {
   });
   if (!await expect("Alice still owns slot 9 (auth check held)", await getUnitOwner(u9), alicePub.toBase58())) failures++;
 
-  // A5: Buyer can't afford
   logStep("A5: ATTACK — Bob with too little ARKIS tries to buy");
   const u10 = unitIdFor(TERRITORY_ID, UInt64.from(10));
   await send("Alice lists slot 10 for 5_000_000 (way more than Bob has)", aliceClient, alicePub, async () => {
@@ -318,7 +304,6 @@ async function main() {
   if (!await expect("Alice still owns slot 10", await getUnitOwner(u10), alicePub.toBase58())) failures++;
   if (!await expect("Slot 10 listing still active", String((await getListing(u10))?.active ?? "null"), "true")) failures++;
 
-  // A6: Double-spend
   logStep("A6: ATTACK — Double-spend the same listing");
   const u11 = unitIdFor(TERRITORY_ID, UInt64.from(11));
   await send("Alice lists slot 11 for 500", aliceClient, alicePub, async () => {
@@ -334,7 +319,6 @@ async function main() {
   if (!await expect("Bob still owns slot 11", await getUnitOwner(u11), bobPub.toBase58())) failures++;
   if (!await expect("Charlie's balance unchanged", await getBalance(charlieVault), charlieBalBeforeA6)) failures++;
 
-  // A7: Stale listing — authority transfers slot 12 mid-listing
   logStep("A7: ATTACK — Stale listing after authority transfer");
   const u12 = unitIdFor(TERRITORY_ID, UInt64.from(12));
   await send("Alice lists slot 12 for 500", aliceClient, alicePub, async () => {
@@ -352,7 +336,6 @@ async function main() {
   if (!await expect("Bob's balance unchanged", await getBalance(bobVault), bobBalBeforeA7)) failures++;
   if (!await expect("Charlie still owns slot 12 (buy was rejected)", await getUnitOwner(u12), charliePub.toBase58())) failures++;
 
-  // A8: Minister-held unit cannot be listed (slot 13)
   logStep("A8: ATTACK — Listing minister-held unit");
   const u13 = unitIdFor(TERRITORY_ID, UInt64.from(13));
   await send("Alice tries to list minister-held slot 13 (should fail)", aliceClient, alicePub, async () => {
@@ -360,7 +343,6 @@ async function main() {
   });
   if (!await expect("Slot 13 has no active listing", String((await getListing(u13))?.active ?? "false"), "false")) failures++;
 
-  // A9: Zero price
   logStep("A9: ATTACK — Listing at price 0");
   const u14 = unitIdFor(TERRITORY_ID, UInt64.from(14));
   await send("Alice tries to list slot 14 for 0 (should fail)", aliceClient, alicePub, async () => {
@@ -368,7 +350,6 @@ async function main() {
   });
   if (!await expect("Slot 14 has no active listing", String((await getListing(u14))?.active ?? "false"), "false")) failures++;
 
-  // A10: Buy a unit that was never listed
   logStep("A10: ATTACK — Buying an unlisted unit");
   const u15 = unitIdFor(TERRITORY_ID, UInt64.from(15));
   const bobBalBeforeA10 = await getBalance(bobVault);
@@ -378,23 +359,11 @@ async function main() {
   if (!await expect("Bob's balance unchanged", await getBalance(bobVault), bobBalBeforeA10)) failures++;
   if (!await expect("Alice still owns slot 15", await getUnitOwner(u15), alicePub.toBase58())) failures++;
 
-  // ── DESIGN AUDIT (A3) ──────────────────────────────────────────
-  // A3 was: "Intruder calls performUnitTransfer directly."
-  // This cannot be expressed as a chain transaction. performUnitTransfer is
-  // a plain async function exported from unitRegistry.ts, intentionally NOT
-  // decorated with @runtimeMethod. There is no chain-addressable path to
-  // invoke it. The only @runtimeMethods that mutate the units StateMap's
-  // owner field are:
-  //   - UnitRegistry.registerUnit  (authority-gated)
-  //   - UnitRegistry.transferUnit  (authority-gated, calls performUnitTransfer)
-  //   - MinaliaSales.buy           (listing + payment gated, calls performUnitTransfer)
-  // No other code path writes a new `owner` to the units StateMap.
   logStep("A3: DESIGN AUDIT — performUnitTransfer is not chain-callable");
   console.log("  ✓ performUnitTransfer is a plain function, no @runtimeMethod decoration");
   console.log("  ✓ Only 3 @runtimeMethods mutate ownership: registerUnit, transferUnit, buy");
   console.log("  ✓ All three are individually access-controlled");
 
-  // ── SUMMARY ────────────────────────────────────────────────────
   logStep("SUMMARY");
   if (failures === 0) {
     console.log("✓ All assertions passed");
