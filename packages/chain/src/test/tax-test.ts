@@ -30,7 +30,7 @@ function logStep(label: string) {
 
 async function main() {
   // Authority key from env — same key the chain uses in genesis config.
-  // For Tax, it still uses its own setAuthority call
+  // All Minalia module authorities are now in genesis config.
   // (those modules haven't been migrated to genesis-config yet).
   // For Treasury, the authority is baked in at chain genesis.
   const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
@@ -93,12 +93,8 @@ async function main() {
   // ── SETUP ─────────────────────────────────────────────────────
   logStep("SETUP: bootstrap UnitRegistry + Tax authority + supply cap + register unit");
 
-  // Tax still uses the setAuthority pattern.
-  // Treasury authority is in genesis config — no setAuthority call needed.
-  await send("Tax.setAuthority", async () => {
-    await tax.setAuthority(authorityPub);
-  });
-
+  // Treasury, UnitRegistry, and Tax all use genesis-config authority.
+  
   await send("Treasury.setSupplyCap(ZARKIS, 10000)", async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(10000));
   });

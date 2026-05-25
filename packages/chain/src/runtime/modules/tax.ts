@@ -3,8 +3,8 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
-import { Balance, TokenId } from "@proto-kit/library";
+import { StateMap, assert, state } from "@proto-kit/protocol";
+import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Provable, Struct } from "o1js";
 import { inject } from "tsyringe";
 import { MinaliaTreasury, TreasuryKey, ZARKIS_TOKEN_ID } from "./treasury";
@@ -17,14 +17,18 @@ export class TaxConfig extends Struct({
   initialised: Bool,
 }) {}
 
+// Genesis-config authority key. Set in runtime/index.ts via the module
+// config object. Named TaxModuleConfig to avoid collision with TaxConfig
+// (the per-unit tax settings struct above).
+interface TaxModuleConfig {
+  authority: PublicKey;
+}
+
 @runtimeModule()
-export class MinaliaTax extends RuntimeModule<unknown> {
+export class MinaliaTax extends RuntimeModule<TaxModuleConfig> {
   @state() public configs = StateMap.from<Field, TaxConfig>(Field, TaxConfig);
   @state() public debts = StateMap.from<Field, Balance>(Field, Balance);
   @state() public lastCharged = StateMap.from<Field, UInt64>(Field, UInt64);
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaTreasury") public treasury: MinaliaTreasury,
@@ -33,20 +37,14 @@ export class MinaliaTax extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
+  // Private helper used by methods that need authority gating.
+  // Authority comes from genesis config, not from runtime state.
   private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
     const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
+    assert(
+      sender.equals(this.config.authority),
+      "Sender is not the authority",
+    );
   }
 
   @runtimeMethod()
