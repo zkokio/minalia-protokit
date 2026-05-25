@@ -7,6 +7,12 @@ import { devIdFor } from "../runtime/modules/developmentRegistry";
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
+const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+if (!AUTHORITY_PRIVATE_KEY) {
+  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+  process.exit(1);
+}
+
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -18,7 +24,7 @@ function logStep(label: string) {
 }
 
 async function main() {
-  const authorityKey = PrivateKey.random();
+  const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
   const authorityPub = authorityKey.toPublicKey();
   const aliceKey = PrivateKey.random();
   const alicePub = aliceKey.toPublicKey();
@@ -97,10 +103,6 @@ async function main() {
   await sendAuth("UnitRegistry.registerUnit slot 1 (owner = Alice)", async () => {
     await registry.registerUnit(TERRITORY_ID, UNIT_SLOT, alicePub, Bool(false));
   });
-  await sendAuth("DevRegistry.setAuthority", async () => {
-    await devs.setAuthority(authorityPub);
-  });
-
   // ── DH1: register a dev ────────────────────────────────────────
   logStep("DH1: register a Foundry on the unit at devSlot 1, architect = Alice");
   const devSlot1 = UInt64.from(1);

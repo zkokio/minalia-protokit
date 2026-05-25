@@ -3,7 +3,7 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
+import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
@@ -43,15 +43,18 @@ export function devIdFor(unitId: Field, devSlot: UInt64): Field {
   return Poseidon.hash([unitId, devSlot.value]);
 }
 
+// Genesis-config authority key. Set in runtime/index.ts via the module
+// config object — baked into the chain from block 0.
+interface DevelopmentRegistryConfig {
+  authority: PublicKey;
+}
+
 @runtimeModule()
-export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
+export class MinaliaDevelopmentRegistry extends RuntimeModule<DevelopmentRegistryConfig> {
   @state() public developments = StateMap.from<Field, DevelopmentState>(
     Field,
     DevelopmentState,
   );
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaLedger") public ledger: MinaliaLedger,
@@ -60,20 +63,14 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
+  // Private helper used by methods that need authority gating.
+  // Authority comes from genesis config, not from runtime state.
   private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
     const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
+    assert(
+      sender.equals(this.config.authority),
+      "Sender is not the authority",
+    );
   }
 
   // Register a new development at unitId/devSlot.
@@ -180,7 +177,6 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
     newArchitect: PublicKey,
   ): Promise<void> {
     await this.assertAuthority();
-
 
     // New architect must be a real key, not the empty/null sentinel.
     assert(
