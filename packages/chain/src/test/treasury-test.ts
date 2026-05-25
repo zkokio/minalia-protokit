@@ -11,9 +11,11 @@ import { LEDGER_KIND } from "../runtime/modules/ledger";
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
-const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
-if (!AUTHORITY_PRIVATE_KEY) {
-  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+// Treasury ops (mint/burn/setSupplyCap/forceTransfer) are king-gated in
+// runtime/index.ts. Signer must be the king key.
+const KING_PRIVATE_KEY = process.env.MINALIA_KING_PRIVATE_KEY;
+if (!KING_PRIVATE_KEY) {
+  console.error("MINALIA_KING_PRIVATE_KEY env var is required. Export the king key matching KING_PUB in runtime/index.ts.");
   process.exit(1);
 }
 
@@ -28,10 +30,10 @@ function logStep(label: string) {
 }
 
 async function main() {
-  // Authority key from env (same key the chain has in genesis config).
-  const signerKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
+  // King key from env (matches KING_PUB baked into chain genesis config).
+  const signerKey = PrivateKey.fromBase58(KING_PRIVATE_KEY!);
   const signerPub = signerKey.toPublicKey();
-  console.log("Test signer (authority):", signerPub.toBase58());
+  console.log("Test signer (king):", signerPub.toBase58());
   console.log(`Settle wait per tx: ${SETTLE_MS / 1000}s`);
 
   const client = buildNodeClient(signerKey, GRAPHQL_URL);

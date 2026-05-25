@@ -25,8 +25,15 @@ export class UnitState extends Struct({
   initialised: Bool,
 }) {}
 
+// TerritoryState carries two pieces of minister info:
+//   - minister:    Field hash of the Minalien NFT identity ("which NFT is the minister")
+//   - ministerKey: PublicKey of the keypair that signs minister txs ("which key signs")
+// Both are set once at bootstrap via assignMinister and never changed.
+// Immutable by design: no on-chain rotation path. If a minister key is
+// lost or compromised, recovery is at the game layer (area relaunch).
 export class TerritoryState extends Struct({
   minister: Field,
+  ministerKey: PublicKey,
   initialised: Bool,
 }) {}
 
@@ -110,10 +117,38 @@ export class MinaliaUnitRegistry extends RuntimeModule<UnitRegistryConfig> {
     );
   }
 
+  // Asserts that the transaction sender is the minister of the territory
+  // that the given unit belongs to. Used by Tax (and later by
+  // DevelopmentRegistry) to gate per-territory operations.
+  // NOT a @runtimeMethod — called from inside other modules' methods.
+  public async assertMinisterOf(unitId: Field): Promise<void> {
+    const unitResult = await this.units.get(unitId);
+    assert(unitResult.value.initialised, "Unit not registered");
+
+    const territoryResult = await this.territories.get(
+      unitResult.value.territoryId,
+    );
+    assert(
+      territoryResult.value.initialised,
+      "Territory not initialised",
+    );
+
+    const sender = this.transaction.sender.value;
+    assert(
+      sender.equals(territoryResult.value.ministerKey),
+      "Sender is not the minister of this territory",
+    );
+  }
+
+  // Bootstrap-only: assign a minister to a territory. Sets BOTH the
+  // in-game NFT identity (ministerHash) AND the crypto key the minister
+  // uses to sign transactions (ministerKey). Once set, neither can be
+  // changed — there is no rotation path by design.
   @runtimeMethod()
   public async assignMinister(
     territoryId: Field,
     ministerHash: Field,
+    ministerKey: PublicKey,
   ): Promise<void> {
     await this.assertAuthority();
 
@@ -121,6 +156,7 @@ export class MinaliaUnitRegistry extends RuntimeModule<UnitRegistryConfig> {
       territoryId,
       new TerritoryState({
         minister: ministerHash,
+        ministerKey,
         initialised: Bool(true),
       }),
     );
