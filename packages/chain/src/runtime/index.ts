@@ -12,10 +12,11 @@ import { MinaliaTax } from "./modules/tax";
 import { MinaliaSales } from "./modules/sales";
 import { MinaliaDevelopmentRegistry } from "./modules/developmentRegistry";
 
-// Authority public key for Treasury admin operations (mint, burn,
-// setSupplyCap, forceTransfer). Read from environment so no private key
-// is committed in source. The chain process and any test client must
-// share the same MINALIA_AUTHORITY_PRIVATE_KEY env var.
+// Authority public key for module admin operations (mint, burn,
+// setSupplyCap, forceTransfer, assignMinister, registerUnit, etc).
+// Read from environment so no private key is committed in source.
+// The chain process and any test client must share the same
+// MINALIA_AUTHORITY_PRIVATE_KEY env var.
 //
 // In production, this is replaced with a key derived from a secret-
 // managed source (KMS, hardware wallet, etc).
@@ -55,7 +56,9 @@ export const config: ModulesConfig<typeof modules> = {
     authority: AUTHORITY_PUB,
   },
   MinaliaLedger: {},
-  MinaliaUnitRegistry: {},
+  MinaliaUnitRegistry: {
+    authority: AUTHORITY_PUB,
+  },
   MinaliaTax: {},
   MinaliaSales: {},
   MinaliaDevelopmentRegistry: {},

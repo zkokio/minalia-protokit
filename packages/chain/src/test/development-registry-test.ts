@@ -91,12 +91,7 @@ async function main() {
   const MARKET = UInt64.from(2);
 
   // ── BOOTSTRAP ──────────────────────────────────────────────────
-  logStep("BOOTSTRAP: register territory + a unit; set DevRegistry authority");
-
-  await sendAuth("UnitRegistry.setAuthority", async () => {
-    await registry.setAuthority(authorityPub);
-  });
-  await sendAuth("UnitRegistry.assignMinister", async () => {
+  logStep("BOOTSTRAP: register territory + a unit; set DevRegistry authority");  await sendAuth("UnitRegistry.assignMinister", async () => {
     await registry.assignMinister(TERRITORY_ID, MINISTER_HASH);
   });
   await sendAuth("UnitRegistry.registerUnit slot 1 (owner = Alice)", async () => {

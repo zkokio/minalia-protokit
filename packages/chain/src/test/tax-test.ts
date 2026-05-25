@@ -30,7 +30,7 @@ function logStep(label: string) {
 
 async function main() {
   // Authority key from env — same key the chain uses in genesis config.
-  // For Tax/UnitRegistry, they still use their own setAuthority calls
+  // For Tax, it still uses its own setAuthority call
   // (those modules haven't been migrated to genesis-config yet).
   // For Treasury, the authority is baked in at chain genesis.
   const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
@@ -93,12 +93,8 @@ async function main() {
   // ── SETUP ─────────────────────────────────────────────────────
   logStep("SETUP: bootstrap UnitRegistry + Tax authority + supply cap + register unit");
 
-  // UnitRegistry and Tax still use the setAuthority pattern.
+  // Tax still uses the setAuthority pattern.
   // Treasury authority is in genesis config — no setAuthority call needed.
-  await send("UnitRegistry.setAuthority", async () => {
-    await registry.setAuthority(authorityPub);
-  });
-
   await send("Tax.setAuthority", async () => {
     await tax.setAuthority(authorityPub);
   });

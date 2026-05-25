@@ -3,7 +3,7 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
+import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
@@ -79,16 +79,20 @@ export async function performUnitTransfer(
   );
 }
 
+// Genesis-config authority key. Set in runtime/index.ts via the module
+// config object — baked into the chain from block 0. No runtime method
+// to change it, no race window to front-run.
+interface UnitRegistryConfig {
+  authority: PublicKey;
+}
+
 @runtimeModule()
-export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
+export class MinaliaUnitRegistry extends RuntimeModule<UnitRegistryConfig> {
   @state() public units = StateMap.from<Field, UnitState>(Field, UnitState);
   @state() public territories = StateMap.from<Field, TerritoryState>(
     Field,
     TerritoryState,
   );
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaLedger") public ledger: MinaliaLedger,
@@ -96,20 +100,14 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
+  // Private helper used by methods that need authority gating.
+  // Authority comes from genesis config, not from runtime state.
   private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
     const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
+    assert(
+      sender.equals(this.config.authority),
+      "Sender is not the authority",
+    );
   }
 
   @runtimeMethod()

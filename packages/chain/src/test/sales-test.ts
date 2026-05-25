@@ -112,10 +112,7 @@ async function main() {
   // ── BOOTSTRAP ──────────────────────────────────────────────────
   logStep("BOOTSTRAP: authority + supply + territory + funding");
 
-  // UnitRegistry still uses setAuthority. Treasury authority is in genesis config.
-  await send("UnitRegistry.setAuthority", authClient, authorityPub, async () => {
-    await registry.setAuthority(authorityPub);
-  });
+  // Both UnitRegistry and Treasury authorities are now in genesis config.
   await send("Treasury.setSupplyCap(ZARKIS, 1_000_000)", authClient, authorityPub, async () => {
     await treasury.setSupplyCap(ZARKIS_TOKEN_ID, Balance.from(1_000_000));
   });

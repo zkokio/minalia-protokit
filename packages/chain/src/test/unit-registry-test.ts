@@ -8,6 +8,12 @@ import {
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
+const AUTHORITY_PRIVATE_KEY = process.env.MINALIA_AUTHORITY_PRIVATE_KEY;
+if (!AUTHORITY_PRIVATE_KEY) {
+  console.error("MINALIA_AUTHORITY_PRIVATE_KEY env var is required. Export the same key the chain uses.");
+  process.exit(1);
+}
+
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -19,8 +25,8 @@ function logStep(label: string) {
 }
 
 async function main() {
-  // The authority key — once set, only this key can mutate the registry.
-  const authorityKey = PrivateKey.random();
+  // The authority key — from env, same key the chain uses in genesis config.
+  const authorityKey = PrivateKey.fromBase58(AUTHORITY_PRIVATE_KEY!);
   const authorityPub = authorityKey.toPublicKey();
 
   // A separate key used to test the "non-authority" rejection path.
@@ -54,7 +60,6 @@ async function main() {
 
   // Test territory + slot. Use unique-looking values to avoid colliding with
   // any leftover state in the in-memory chain across test runs.
-  // Field values derived from a string-like nonce to keep them distinctive.
   const TERRITORY_ID = Field(900001);
   const MINISTER_HASH = Field(900099);
   const SLOT_1 = UInt64.from(1);
@@ -98,11 +103,6 @@ async function main() {
     };
   }
 
-  async function getAuthorityInitialised(): Promise<boolean> {
-    const v = await authClient.query.runtime.MinaliaUnitRegistry.authorityInitialised.get();
-    return v?.toBoolean() ?? false;
-  }
-
   async function expect(label: string, actual: string, expected: string) {
     const pass = actual === expected;
     const symbol = pass ? "✓" : "✗";
@@ -112,25 +112,10 @@ async function main() {
 
   let failures = 0;
 
-  // ── TEST 1: setAuthority ─────────────────────────────────────────
-  // If authority is already initialised (from a prior test run on the
-  // same in-memory chain), skip — this test only makes sense once.
-  logStep("TEST 1: setAuthority (one-time bootstrap)");
-  const alreadyInit = await getAuthorityInitialised();
-  if (alreadyInit) {
-    console.log("  authority already initialised on this chain — skipping set; using existing");
-    console.log("  NOTE: subsequent tests assume the existing authority matches this test's authority,");
-    console.log("  which it won't on a re-run. Restart the node for a clean test of authority gating.");
-  } else {
-    await sendAuth("setAuthority(authorityPub)", async () => {
-      await authRegistry.setAuthority(authorityPub);
-    });
-    const initAfter = await getAuthorityInitialised();
-    if (!await expect("authorityInitialised", String(initAfter), "true")) failures++;
-  }
+  // No setAuthority bootstrap needed — authority is baked into chain genesis.
 
-  // ── TEST 2: assignMinister ───────────────────────────────────────
-  logStep("TEST 2: assignMinister(territory, ministerHash)");
+  // ── TEST 1: assignMinister ───────────────────────────────────────
+  logStep("TEST 1: assignMinister(territory, ministerHash)");
   await sendAuth("assignMinister", async () => {
     await authRegistry.assignMinister(TERRITORY_ID, MINISTER_HASH);
   });
@@ -139,8 +124,8 @@ async function main() {
   if (!await expect("territory.minister", tState?.minister ?? "null", MINISTER_HASH.toString())) failures++;
   if (!await expect("territory.initialised", String(tState?.initialised ?? false), "true")) failures++;
 
-  // ── TEST 3: registerUnit (player-owned) ──────────────────────────
-  logStep("TEST 3: registerUnit slot 1, owner=Player1, isMinisterHeld=false");
+  // ── TEST 2: registerUnit (player-owned) ──────────────────────────
+  logStep("TEST 2: registerUnit slot 1, owner=Player1, isMinisterHeld=false");
   await sendAuth("registerUnit", async () => {
     await authRegistry.registerUnit(TERRITORY_ID, SLOT_1, playerPub, Bool(false));
   });
@@ -154,8 +139,8 @@ async function main() {
   if (!await expect("unit.isMinisterHeld", String(u1?.isMinisterHeld ?? "null"), "false")) failures++;
   if (!await expect("unit.initialised", String(u1?.initialised ?? "null"), "true")) failures++;
 
-  // ── TEST 4: registerUnit (minister-held) ─────────────────────────
-  logStep("TEST 4: registerUnit slot 2, isMinisterHeld=true");
+  // ── TEST 3: registerUnit (minister-held) ─────────────────────────
+  logStep("TEST 3: registerUnit slot 2, isMinisterHeld=true");
   await sendAuth("registerUnit (minister-held)", async () => {
     await authRegistry.registerUnit(TERRITORY_ID, SLOT_2, playerPub, Bool(true));
   });
@@ -164,8 +149,8 @@ async function main() {
   console.log("  unit:", u2);
   if (!await expect("unit.isMinisterHeld", String(u2?.isMinisterHeld ?? "null"), "true")) failures++;
 
-  // ── TEST 5: transferUnit ─────────────────────────────────────────
-  logStep("TEST 5: transferUnit slot 1 → Player2 (clears isMinisterHeld)");
+  // ── TEST 4: transferUnit ─────────────────────────────────────────
+  logStep("TEST 4: transferUnit slot 1 → Player2 (clears isMinisterHeld)");
   await sendAuth("transferUnit", async () => {
     await authRegistry.transferUnit(unitId1, player2Pub);
   });
@@ -173,13 +158,10 @@ async function main() {
   console.log("  unit after transfer:", u1after);
   if (!await expect("unit.owner after transfer", u1after?.owner ?? "null", player2Pub.toBase58())) failures++;
   if (!await expect("unit.isMinisterHeld after transfer", String(u1after?.isMinisterHeld ?? "null"), "false")) failures++;
-  // Minister & territory should be preserved
   if (!await expect("unit.minister preserved", u1after?.minister ?? "null", MINISTER_HASH.toString())) failures++;
 
-  // ── TEST 6: intruder cannot register a unit ──────────────────────
-  // The intruder signs a tx calling registerUnit. Because the signer != authority,
-  // the on-chain assertion should fail and no unit should appear at slot 3.
-  logStep("TEST 6: intruder rejected when calling registerUnit");
+  // ── TEST 5: intruder cannot register a unit ──────────────────────
+  logStep("TEST 5: intruder rejected when calling registerUnit");
   const SLOT_3 = UInt64.from(3);
   const unitId3 = unitIdFor(TERRITORY_ID, SLOT_3);
   const beforeIntruder = await getUnit(unitId3);
@@ -191,7 +173,6 @@ async function main() {
 
   const afterIntruder = await getUnit(unitId3);
   console.log("  unit at slot 3 after intruder attempt:", afterIntruder);
-  // The unit should still NOT exist (assertion in the runtime method rejected the tx).
   const intruderRejected =
     afterIntruder === null || afterIntruder.initialised === false;
   if (!await expect("intruder did NOT create unit", String(intruderRejected), "true")) failures++;
