@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+    <style>
+      .module { fill: #f7f6f1; stroke: #333; stroke-width: 1.5; }
+      .module-label { font-weight: 600; font-size: 14px; }
+      .rtm { fill: #c9e4ff; stroke: #2a6fb0; stroke-width: 1; }
+      .helper { fill: #ffe5c2; stroke: #b56c14; stroke-width: 1; stroke-dasharray: 4 3; }
+      .auth-chip { font-size: 11px; fill: #555; }
+      .arr-call { stroke: #444; stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+      .legend-text { font-size: 12px; fill: #333; }
+      .legend-title { font-size: 12px; font-weight: 600; fill: #333; }
+      .note { font-size: 11px; fill: #666; font-style: italic; }
+    </style>
+  </defs>
+
+  <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#222">Composition pattern: @runtimeMethods call plain helpers</text>
+  <text x="450" y="48" text-anchor="middle" class="note">Plain helpers are not chain-addressable. Each caller does its own access check.</text>
+
+  <!-- Sales module -->
+  <rect class="module" x="40" y="90" width="220" height="170" rx="6"/>
+  <text x="150" y="112" text-anchor="middle" class="module-label">MinaliaSales</text>
+  <text x="150" y="128" text-anchor="middle" class="auth-chip">(player-driven)</text>
+  <rect class="rtm" x="60" y="148" width="180" height="28" rx="4"/>
+  <text x="150" y="167" text-anchor="middle">@list / cancelListing</text>
+  <rect class="rtm" x="60" y="184" width="180" height="28" rx="4"/>
+  <text x="150" y="203" text-anchor="middle">@buy</text>
+  <text x="150" y="232" text-anchor="middle" class="note">validates listing,</text>
+  <text x="150" y="246" text-anchor="middle" class="note">re-checks ownership</text>
+
+  <!-- Tax module -->
+  <rect class="module" x="40" y="300" width="220" height="170" rx="6"/>
+  <text x="150" y="322" text-anchor="middle" class="module-label">MinaliaTax</text>
+  <text x="150" y="338" text-anchor="middle" class="auth-chip">(deployer + per-minister)</text>
+  <rect class="rtm" x="60" y="358" width="180" height="28" rx="4"/>
+  <text x="150" y="377" text-anchor="middle">@setTaxConfig (deployer)</text>
+  <rect class="rtm" x="60" y="394" width="180" height="28" rx="4"/>
+  <text x="150" y="413" text-anchor="middle">@chargeTax (minister)</text>
+  <text x="150" y="442" text-anchor="middle" class="note">assertMinisterOf(unitId),</text>
+  <text x="150" y="456" text-anchor="middle" class="note">then performForceTransfer</text>
+
+  <!-- UnitRegistry module -->
+  <rect class="module" x="340" y="90" width="240" height="200" rx="6"/>
+  <text x="460" y="112" text-anchor="middle" class="module-label">MinaliaUnitRegistry</text>
+  <text x="460" y="128" text-anchor="middle" class="auth-chip">(deployer-gated)</text>
+  <rect class="rtm" x="360" y="148" width="200" height="28" rx="4"/>
+  <text x="460" y="167" text-anchor="middle">@transferUnit (deployer)</text>
+  <rect class="helper" x="360" y="184" width="200" height="42" rx="4"/>
+  <text x="460" y="203" text-anchor="middle" font-weight="600">performUnitTransfer()</text>
+  <text x="460" y="218" text-anchor="middle" class="note">no auth check</text>
+  <rect class="helper" x="360" y="234" width="200" height="42" rx="4"/>
+  <text x="460" y="253" text-anchor="middle" font-weight="600">assertMinisterOf(unitId)</text>
+  <text x="460" y="268" text-anchor="middle" class="note">looks up ministerKey on chain</text>
+
+  <!-- Treasury module -->
+  <rect class="module" x="340" y="320" width="240" height="200" rx="6"/>
+  <text x="460" y="342" text-anchor="middle" class="module-label">MinaliaTreasury</text>
+  <text x="460" y="358" text-anchor="middle" class="auth-chip">(king-gated)</text>
+  <rect class="rtm" x="360" y="378" width="200" height="28" rx="4"/>
+  <text x="460" y="397" text-anchor="middle">@forceTransfer (king)</text>
+  <rect class="helper" x="360" y="414" width="200" height="42" rx="4"/>
+  <text x="460" y="433" text-anchor="middle" font-weight="600">performForceTransfer()</text>
+  <text x="460" y="448" text-anchor="middle" class="note">no auth check</text>
+  <rect class="rtm" x="360" y="464" width="200" height="28" rx="4"/>
+  <text x="460" y="483" text-anchor="middle">@mint / @burn / @transfer</text>
+
+  <!-- Ledger module -->
+  <rect class="module" x="660" y="200" width="200" height="200" rx="6"/>
+  <text x="760" y="222" text-anchor="middle" class="module-label">MinaliaLedger</text>
+  <text x="760" y="238" text-anchor="middle" class="auth-chip">(no auth)</text>
+  <rect class="helper" x="680" y="258" width="160" height="42" rx="4"/>
+  <text x="760" y="277" text-anchor="middle" font-weight="600">record()</text>
+  <text x="760" y="292" text-anchor="middle" class="note">no @runtimeMethod</text>
+  <text x="760" y="332" text-anchor="middle" class="note">all modules write</text>
+  <text x="760" y="346" text-anchor="middle" class="note">audit entries here</text>
+  <text x="760" y="372" text-anchor="middle" class="note">no chain entry point —</text>
+  <text x="760" y="386" text-anchor="middle" class="note">cannot be hostile-called</text>
+
+  <!-- Arrows -->
+  <!-- Sales.buy -> performUnitTransfer -->
+  <path class="arr-call" d="M 260 198 C 300 198 320 205 358 205"/>
+  <!-- Sales.buy -> Treasury.transfer (chain method) -->
+  <path class="arr-call" d="M 260 205 C 290 205 290 478 358 478"/>
+  <!-- UnitRegistry.transferUnit -> performUnitTransfer -->
+  <path class="arr-call" d="M 410 178 L 410 184"/>
+  <path class="arr-call" d="M 510 178 L 510 184"/>
+  <!-- Tax.chargeTax -> assertMinisterOf -->
+  <path class="arr-call" d="M 260 408 C 305 408 320 256 358 256"/>
+  <!-- Tax.chargeTax -> performForceTransfer -->
+  <path class="arr-call" d="M 260 412 C 305 412 320 433 358 433"/>
+  <!-- Treasury.forceTransfer -> performForceTransfer (inside same module) -->
+  <path class="arr-call" d="M 410 408 L 410 414"/>
+  <path class="arr-call" d="M 510 408 L 510 414"/>
+  <!-- performForceTransfer -> Ledger.record -->
+  <path class="arr-call" d="M 580 435 C 620 435 640 290 680 280"/>
+  <!-- performUnitTransfer -> Ledger.record -->
+  <path class="arr-call" d="M 580 205 C 620 205 640 270 680 275"/>
+  <!-- Treasury.mint/burn/transfer -> Ledger.record -->
+  <path class="arr-call" d="M 580 478 C 640 478 660 295 680 285"/>
+
+  <!-- Legend -->
+  <rect fill="#fdfdfb" stroke="#888" stroke-width="1" x="40" y="495" width="820" height="50" rx="4"/>
+  <rect class="rtm" x="60" y="510" width="20" height="14" rx="2"/>
+  <text x="90" y="522" class="legend-text">@runtimeMethod — chain-addressable, signed tx required</text>
+  <rect class="helper" x="430" y="510" width="20" height="14" rx="2"/>
+  <text x="460" y="522" class="legend-text">plain helper — not @runtimeMethod, not chain-callable, no auth check</text>
+</svg>

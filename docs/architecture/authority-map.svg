@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="13">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+    <style>
+      .role-deployer { fill: #e6f0ff; stroke: #2a6fb0; stroke-width: 1.5; }
+      .role-king { fill: #fff2c2; stroke: #a07000; stroke-width: 1.5; }
+      .role-minister { fill: #e6f5e1; stroke: #2e7d32; stroke-width: 1.5; }
+      .role-player { fill: #f3eaff; stroke: #6a3aa0; stroke-width: 1.5; }
+      .role-label { font-weight: 700; font-size: 14px; }
+      .role-sub { font-size: 11px; fill: #555; }
+      .module-box { fill: #f7f6f1; stroke: #333; stroke-width: 1.5; }
+      .module-name { font-weight: 600; font-size: 13px; }
+      .method-line { font-size: 12px; }
+      .arr-d { stroke: #2a6fb0; stroke-width: 1.4; fill: none; marker-end: url(#arr2); }
+      .arr-k { stroke: #a07000; stroke-width: 1.4; fill: none; marker-end: url(#arr2); }
+      .arr-m { stroke: #2e7d32; stroke-width: 1.4; fill: none; marker-end: url(#arr2); }
+      .arr-p { stroke: #6a3aa0; stroke-width: 1.4; fill: none; marker-end: url(#arr2); }
+      .note { font-size: 11px; fill: #666; font-style: italic; }
+    </style>
+  </defs>
+
+  <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#222">Authority architecture: four independent role types, no role can rotate another</text>
+
+  <!-- Role pools (left side) -->
+  <rect class="role-deployer" x="40" y="70" width="200" height="100" rx="6"/>
+  <text x="140" y="94" text-anchor="middle" class="role-label">DEPLOYER (x1)</text>
+  <text x="140" y="116" text-anchor="middle" class="role-sub">bootstrap + governance</text>
+  <text x="140" y="134" text-anchor="middle" class="role-sub">dormant after bootstrap</text>
+  <text x="140" y="152" text-anchor="middle" class="role-sub">DEPLOYER_PUB hardcoded</text>
+
+  <rect class="role-king" x="40" y="190" width="200" height="100" rx="6"/>
+  <text x="140" y="214" text-anchor="middle" class="role-label">KING (x1)</text>
+  <text x="140" y="236" text-anchor="middle" class="role-sub">supply + currency-exchange</text>
+  <text x="140" y="254" text-anchor="middle" class="role-sub">never touches minister vaults</text>
+  <text x="140" y="272" text-anchor="middle" class="role-sub">KING_PUB hardcoded</text>
+
+  <rect class="role-minister" x="40" y="310" width="200" height="120" rx="6"/>
+  <text x="140" y="334" text-anchor="middle" class="role-label">MINISTERS (x20)</text>
+  <text x="140" y="356" text-anchor="middle" class="role-sub">one per Luminaea district</text>
+  <text x="140" y="374" text-anchor="middle" class="role-sub">each signs ONLY for</text>
+  <text x="140" y="390" text-anchor="middle" class="role-sub">their own territory</text>
+  <text x="140" y="408" text-anchor="middle" class="role-sub">immutable after bootstrap</text>
+  <text x="140" y="424" text-anchor="middle" class="role-sub">MINISTER_PUBS[20] hardcoded</text>
+
+  <rect class="role-player" x="40" y="450" width="200" height="80" rx="6"/>
+  <text x="140" y="474" text-anchor="middle" class="role-label">PLAYERS (any)</text>
+  <text x="140" y="496" text-anchor="middle" class="role-sub">Auro-wallet user accounts</text>
+  <text x="140" y="514" text-anchor="middle" class="role-sub">sign their own vault moves</text>
+
+  <!-- Modules (right side) -->
+  <rect class="module-box" x="430" y="70" width="430" height="80" rx="6"/>
+  <text x="450" y="92" class="module-name">MinaliaTreasury</text>
+  <text x="450" y="112" class="method-line">@mint / @burn / @setSupplyCap / @forceTransfer</text>
+  <text x="450" y="130" class="method-line">@transfer (player vault is source)</text>
+
+  <rect class="module-box" x="430" y="170" width="430" height="80" rx="6"/>
+  <text x="450" y="192" class="module-name">MinaliaUnitRegistry</text>
+  <text x="450" y="212" class="method-line">@assignMinister / @registerUnit / @transferUnit</text>
+  <text x="450" y="232" class="method-line">(deployer-gated bootstrap + admin)</text>
+
+  <rect class="module-box" x="430" y="270" width="430" height="80" rx="6"/>
+  <text x="450" y="292" class="module-name">MinaliaTax</text>
+  <text x="450" y="312" class="method-line">@setTaxConfig (deployer-gated)</text>
+  <text x="450" y="332" class="method-line">@chargeTax (minister of unit's territory)</text>
+
+  <rect class="module-box" x="430" y="370" width="430" height="80" rx="6"/>
+  <text x="450" y="392" class="module-name">MinaliaDevelopmentRegistry</text>
+  <text x="450" y="412" class="method-line">@registerDevelopment / @upgrade / @assignManager</text>
+  <text x="450" y="432" class="method-line">(deployer-gated; minister-scoping pending)</text>
+
+  <rect class="module-box" x="430" y="450" width="430" height="80" rx="6"/>
+  <text x="450" y="472" class="module-name">MinaliaSales</text>
+  <text x="450" y="492" class="method-line">@list / @cancelListing / @buy</text>
+  <text x="450" y="510" class="method-line">(player-driven; no authority)</text>
+
+  <!-- Arrows from roles to module methods -->
+  <!-- Deployer -> UnitRegistry -->
+  <path class="arr-d" d="M 240 200 L 430 200"/>
+  <!-- Deployer -> Tax setTaxConfig -->
+  <path class="arr-d" d="M 240 165 C 320 165 340 305 430 305"/>
+  <!-- Deployer -> DevelopmentRegistry -->
+  <path class="arr-d" d="M 240 155 C 360 155 380 405 430 405"/>
+
+  <!-- King -> Treasury (all mint/burn/setSupplyCap/forceTransfer) -->
+  <path class="arr-k" d="M 240 230 C 320 230 340 110 430 110"/>
+
+  <!-- Minister -> Tax chargeTax -->
+  <path class="arr-m" d="M 240 380 C 320 380 350 330 430 330"/>
+
+  <!-- Player -> Treasury.transfer -->
+  <path class="arr-p" d="M 240 480 C 320 480 340 130 430 130"/>
+  <!-- Player -> Sales -->
+  <path class="arr-p" d="M 240 495 L 430 495"/>
+
+  <!-- Legend -->
+  <rect fill="#fdfdfb" stroke="#888" stroke-width="1" x="40" y="555" width="820" height="50" rx="4"/>
+  <line x1="60" y1="572" x2="100" y2="572" class="arr-d"/>
+  <text x="110" y="576" font-size="12" fill="#333">deployer signs</text>
+  <line x1="240" y1="572" x2="280" y2="572" class="arr-k"/>
+  <text x="290" y="576" font-size="12" fill="#333">king signs</text>
+  <line x1="400" y1="572" x2="440" y2="572" class="arr-m"/>
+  <text x="450" y="576" font-size="12" fill="#333">minister signs (own territory only)</text>
+  <line x1="700" y1="572" x2="740" y2="572" class="arr-p"/>
+  <text x="750" y="576" font-size="12" fill="#333">player signs</text>
+  <text x="450" y="595" text-anchor="middle" class="note">No arrow from king to Tax, no arrow from deployer to Treasury — separation of concerns.</text>
+</svg>

@@ -1,328 +1,213 @@
-# Protokit starter-kit
+# MINALIA on Protokit
 
-This repository is a monorepo aimed at kickstarting application chain development using the Protokit framework.
-You can learn more about the Protokit framework at the [official documentation](https://protokit.dev), or at the official [Mina discord](https://discord.gg/minaprotocol).
+MINALIA is an on-chain territory game on Mina, where the game's economy (ownership, tax, sales, yields) runs on a Protokit appchain. The actual game logic — content, lore, social state, UI — stays in Supabase. This repo is the on-chain economy.
 
-## Quick start
+This is a **snapshot** taken from a working dev branch for the Protokit team to review. It is not a runnable Protokit project on its own; it's the MINALIA-specific runtime modules and tests we've built on top of the Protokit starter.
 
-**Prerequisites:**
+---
 
-- Node.js `v18.18` (we recommend using NVM)
-- pnpm `v9.8.0`
-- nvm
-- [Auro Wallet](https://www.aurowallet.com)
-- (optional) For running with persistance / deploying on a server
-    - docker `>= 24.0`
-    - docker-compose `>= 2.22.0`
+## What's here
 
-**Run the following commands to get started:**
-```zsh
-# clone the repository
-git clone https://github.com/proto-kit/starter-kit my-chain
-cd my-chain
+### Runtime modules (`src/runtime/modules/`)
 
-# ensures you have the right node.js version
-nvm use
-# install dependencies
-pnpm install
-# generate prisma clients (indexer, ...)
-pnpm env:development prisma:generate
-# starts both the UI and the sequencer (file watcher / live reload enabled)
-pnpm env:inmemory dev
-```
-Visit http://localhost:3000 to view the example UI, or http://localhost:8080/graphql to explore the sequencer's GraphQL APIs.
+| Module | What it does |
+|---|---|
+| `treasury.ts` | Multi-class vaults (player, minister, king, duel-pot). Mint, burn, transfer, forceTransfer. Per-token supply caps. King-gated. Exports `performForceTransfer` as a shared helper for trusted internal callers. |
+| `ledger.ts` | Append-only audit log keyed by global index. Every money movement and ownership event writes here, tagged with principal class, principal hash, token, credit, debit, kind, and block height. `record` is a plain helper, not chain-addressable. |
+| `unitRegistry.ts` | On-chain ownership graph. Units keyed by `Poseidon(territoryId, slot)`. Territories store both the minister's NFT identity hash and the minister's PublicKey. Deployer-gated mutations. Exports `performUnitTransfer` and `assertMinisterOf(unitId)` as shared helpers. |
+| `tax.ts` | Per-unit weekly tax with all-or-nothing debt accrual. `setTaxConfig` is deployer-gated (governance). `chargeTax` is **minister-gated per territory**: the territory's minister key signs, money flows into that minister's vault and nowhere else. |
+| `sales.ts` | Two-step marketplace (`list`, `cancelListing`, `buy`). 2% fee deducted from seller proceeds, paid to the territory minister. Stale-listing protection. Player-driven (no authority). Composes `UnitRegistry` (via the shared helper) and `Treasury`. |
+| `developmentRegistry.ts` | Per-unit development tracking. Each dev keyed by `Poseidon(unitId, devSlot)` with type, upgrade level, architect, and manager fields. Cross-module check that the unit exists. 1-to-15 slot cap enforced on-chain. Empty PublicKey rejected as architect. Currently deployer-gated; minister-scoping pending. |
 
-### Structural overview
+### Tests (`src/test/`)
 
-The starter kit contains the following files and folders:
-```
-├── apps
-│   └── web // example UI that connects to the app-chain's sequencer
-│       ├── components // display components
-│       ├── containers // smart components ("containers")
-│       └── lib
-│           └── stores // data stores for interacting with the app-chain's sequencer
-│           
-├── docker
-│   └── data // mounted as a volume for the docker containers
-│
-└── packages
-    └── chain
-        ├── src // source files for various app-chain modules
-        │   ├── core // core app-chain configuration
-        │   │   ├── environments // app-chain environments (inmemory, development, ...)
-        │   │   └── processor // processor configuration (handlers, graphql resolvers, graphql server, ...)
-        │   ├── protocol // protocol modules (transaction fees, ...)
-        │   └── runtime // runtime modules (your app-chain's business logic)
-        │       └── modules 
-        │           ├── balances.ts // built-in example runtime module for Balances, with a faucet
-        │           └── withdrawals.ts // withdrawal functionality module
-        └── test // tests for various app-chain components
-            └── runtime
-                └── modules
-                    └── balances.test.ts
+End-to-end tests run against a local Protokit `inmemory` chain. Each test boots a node client (or several, when multiple signers are needed), sends signed transactions, waits for settlement, and verifies state.
 
-```
+| Test | Assertions | Covers |
+|---|---|---|
+| `treasury-test.ts` | 21 | King-gated mint/burn/setSupplyCap, sender-owns-from on transfer, forceTransfer via the king-gated wrapper, automatic ledger entries on every movement |
+| `unit-registry-test.ts` | 13 | assignMinister sets both ministerHash and ministerKey, registerUnit (player-owned + minister-held), transferUnit, **adversarial: non-deployer cannot register a unit** |
+| `tax-test.ts` | 14 | Happy path payment, debt accrual when player can't pay, multi-cycle accrual, full clearance when player gets funds, **adversarial: non-minister cannot chargeTax** |
+| `sales-test.ts` | 26+ | 6 happy paths + 9 adversarial scenarios (intruder lists, intruder cancels, direct `transferUnit` call, insufficient buyer balance, double-spend, stale listing after admin transfer, minister-held listing, zero price, unlisted buy) |
+| `development-registry-test.ts` | 22 | 5 happy paths (register/upgrade/assignManager/transferArchitect/coexisting devs) + 9 adversarial scenarios (intruder mutations, register on missing unit, register on occupied slot, upgrade empty slot, out-of-range slot numbers, empty-PublicKey architect rejected) |
 
-## Environments
+**All passing on a live chain.**
 
-The starter-kit offers different environments to run you appchain.
-You can use those environments to configure the mode of operation for your appchain depending on which stage of development you are in.
+The ledger is covered indirectly by every test (treasury writes MINT/BURN/TRANSFER, sales writes SALE/SALE_FEE, tax writes TAX, unit/dev writes ownership and lifecycle events). `ledger.record` is no longer chain-callable, so there is no dedicated direct-write test for it.
 
-The starter kit comes with a set of pre-configured environments:
-- `inmemory`: Runs everything in-memory without persisting the data. Useful for early stages of runtime development.
-- `development`: Runs the sequencer locally and persists all state in databases running in docker. 
-- `sovereign`: Runs your appchain fully in docker (including the UI) for testnet deployments without settlement or bridging.
+---
 
-Every command you execute should follow this pattern:
+## Authority architecture
 
-```
-pnpm env:<environment> <command>
-```
+![Authority map](docs/architecture/authority-map.svg)
 
-> This makes sure that everything is set correctly and our tooling knows which environment you want to use.
 
-### Environment files
+MINALIA splits chain authority into **three independent roles**, none of which can rotate another:
 
-Each environment comes with a set of environment variables specified in `.env`. This allows for configuration for the Protokit app-chain stack.
+| Role | Count | Powers | Lifecycle |
+|---|---|---|---|
+| **Deployer** | 1 | Bootstrap + governance: `assignMinister`, `registerUnit`, `transferUnit`, `setTaxConfig`. Currently also DevelopmentRegistry mutations (minister-scoping pending). | Active briefly at chain start; thereafter dormant except for rare governance ops. |
+| **King** | 1 | Protocol-level supply: `mint`, `burn`, `setSupplyCap`. King-vault movements via `forceTransfer`. Future: currency-exchange commission. **Uninvolved in minister/tax operations.** | Active forever. Used by the website's currency-exchange backend. |
+| **Minister × 20** | 20 | Their own district's `chargeTax`. Money flows from player vault into that minister's vault — never any other minister's. | Immutable after bootstrap. No on-chain rotation path. If a key is compromised, recovery is at the game layer (area relaunch). |
 
-To learn more about what configuration options are available, check out any of the available env files at `packages/chain/src/core/environments/<environment>/.env`
+All three role public keys are hardcoded in `runtime/index.ts` as `DEPLOYER_PUB`, `KING_PUB`, and `MINISTER_PUBS[20]`. Per-territory minister keys are stored on-chain in `TerritoryState.ministerKey`, populated by `assignMinister` at bootstrap. The chain process itself needs no private keys; only the clients that sign transactions do.
 
-## Development workflow
+Keys are generated via `scripts/generate-minalia-keys.mjs`. The private keys live outside the repo. The chain has its public keys baked in from block 0.
 
-### Running tests
+---
 
-```zsh
-# run and watch tests for the `chain` package
-pnpm env:inmemory run test --filter=chain -- --watchAll
+## Composition pattern (the headline learning)
+
+![Composition pattern](docs/architecture/composition.svg)
+
+When a player-driven module needs to mutate state owned by another module, exposing a second `@runtimeMethod` on the target module creates a hole — any user can craft a signed tx to that method directly. The Protokit team's recommended pattern (May 2026, via question) is to **extract the shared mutation logic into a plain (non-`@runtimeMethod`) helper function** that both modules' `@runtimeMethod`s call. Each `@runtimeMethod` does its own access control; the helper is just code, not externally callable.
+
+This codebase uses the pattern in three places:
+
+- `unitRegistry.ts` exports `performUnitTransfer(units, ledger, blockHeight, unitId, newOwner)` — a plain async function. Both `UnitRegistry.transferUnit` (deployer-gated) and `MinaliaSales.buy` (player-driven, after listing validation) call it.
+- `treasury.ts` exports `performForceTransfer(balances, ledger, blockHeight, from, to, amount, kind)` — a plain async function. Both `Treasury.forceTransfer` (king-gated wrapper, for currency-exchange and other king-vault moves) and `MinaliaTax.chargeTax` (after asserting sender is the unit's minister) call it. This lets ministers move money out of player vaults into their own treasury without having to be the king.
+- `ledger.ts`'s `record` method was demoted from `@runtimeMethod` to plain. Modules call it via `@inject` exactly as before, but it has no chain-addressable path so it cannot be invoked by a hostile signed tx.
+
+The adversarial scenarios in `sales-test.ts` and `tax-test.ts` verify the security boundary: an intruder cannot list someone else's unit, cancel someone else's listing, call `transferUnit` directly, charge tax as a non-minister, buy without funds, double-spend a listing, exploit a stale listing, list a minister-held unit, list at zero price, or buy an unlisted unit. All blocked.
+
+---
+
+## Running these tests against a Protokit chain
+
+The tests in `src/test/` are node scripts that submit signed transactions to a live Protokit chain via GraphQL. They expect the chain to be running on `localhost:8080`.
+
+**Important #1: start the chain directly with `node` — not via `pnpm dev`.** Running the chain through `pnpm dev` (which invokes `turbo run dev`) silently drops every transaction in our environment. The chain produces blocks normally but every block reports `0 txs`. No errors are logged. State reads return null. We hit this for several hours before realising the wrapper was the cause; details and a reproduction in [proto-kit/framework#519](https://github.com/proto-kit/framework/issues/519).
+
+**Important #2: three private keys are needed.** The chain process itself reads no env vars for keys (public keys are hardcoded in `runtime/index.ts`), but the tests sign transactions and so need access to private keys:
+- `MINALIA_KING_PRIVATE_KEY` for `treasury-test` (and parts of `tax-test`, `sales-test`)
+- `MINALIA_DEPLOYER_PRIVATE_KEY` for `unit-registry-test`, `development-registry-test`, and parts of `tax-test`, `sales-test`
+- The tests that exercise `chargeTax` generate throwaway minister keypairs and register them as the territory's minister at bootstrap — so the real per-district minister keys are not needed for the test suite.
+
+Generate the role keypairs (deployer + king + 20 ministers) via the helper script:
+
+```bash
+cd packages/chain
+node scripts/generate-minalia-keys.mjs > /path/outside/repo/keys.env
+chmod 600 /path/outside/repo/keys.env
 ```
 
-### (Optional) Running the containerized dependencies
+Bake the public keys into `runtime/index.ts` (the script prints them so they can be copied across). Keep the file with the private keys outside the repo and chmod'd 600.
 
-> This step isn't required if you're using the `inmemory` environment.
+To start the chain:
 
-```
-# run dockerized dependencies in the background
-pnpm env:development docker:up -d
+```bash
+cd packages/chain
 
-# generate prisma clients
-pnpm env:development prisma:generate
-
-# migrate database schemas
-pnpm env:development prisma:migrate
-```
-
-#### Pruning data
-
-Persisted data is stored under `docker/data`, you can delete this folder in case you're experiencing issues with persistence and need to reset your environment setup entirely. 
-
-However to prune data during development, you should use the `--pruneOnStartup` CLI option [documented here](#cli-options)
-
-### Running the sequencer
-
-Ensure you've successfully started the dockerized dependencies, generated and migrated all prisma schemas before running the sequencer (or indexer) in the development environment. In case of using the inmemory environment, you don't need to start the dockerized dependencies.
-
-#### With live reload
-
-> ⚠️ Be aware, the dev command will automatically restart your application when your sources change. 
-> Please keep in mind that running the components below in `dev` mode (with live reload / watchersr) is advisable only when you're working on that specific component. In case you're experiencing issues with watches cross-triggering reload of different components, you can use the `start` command instead.
-
-```zsh
-pnpm env:development sequencer:dev --filter=chain
+nohup node \
+  --loader ts-node/esm \
+  --experimental-vm-modules \
+  --experimental-wasm-modules \
+  --es-module-specifier-resolution=node \
+  ./src/start.ts \
+  start ./core/environments/inmemory/chain.config.ts \
+  --logLevel debug \
+  > /tmp/protokit.log 2>&1 &
 ```
 
-#### Without live reload
+Wait until `Produced block #N (0 txs)` appears in `/tmp/protokit.log`. Then in the same shell (so the env vars persist):
 
-```zsh
-pnpm env:development build --filter=chain
-pnpm env:development sequencer:start --filter=chain
+```bash
+set -a
+source /path/outside/repo/keys.env
+set +a
+
+cd packages/chain
+pnpm test:treasury
+pnpm test:units
+pnpm test:tax
+pnpm test:sales
+pnpm test:devs
 ```
 
-### Observability
+`set -a` / `set +a` is required to actually export the variables to child processes — plain `source` only sets them as shell variables. Each test boots its own node client(s), submits txs, and waits 10–20 seconds per tx for settlement before checking state. The full suite takes about 30–40 minutes end-to-end. Restarting the chain between tests isn't required — the chain has nothing per-test to bootstrap, and each test uses distinctive territory IDs to avoid collision.
 
-Protokit has the ability to report metrics, logs and traces to a Grafana instance for visualisation.
-These can be configured by the following environment variables
-```zsh
-OPEN_TELEMETRY_TRACING_URL=
-OPEN_TELEMETRY_TRACING_ENABLED=
+---
 
-OPEN_TELEMETRY_METRICS_URL=
-OPEN_TELEMETRY_METRICS_ENABLED=
-OPEN_TELEMETRY_METRICS_SCRAPING_FREQUENCY=
-````
-Note that the functionality is not configured for the `in-memory` mode.
+## How this fits into a Protokit project
 
-### Running the UI
+This repo contains only the MINALIA-specific files. In the actual codebase they live inside a Protokit starter at `packages/chain/src/runtime/modules/` alongside the starter's `Balances`, `Withdrawals`, and `DevelopmentYield` modules.
 
-```zsh
-pnpm env:development dev --filter=web
-```
+The included `src/runtime/index.ts` references those starter modules in its imports. That's not an oversight; it's an honest snapshot of how MINALIA's modules slot into a Protokit project. To actually run this code, drop these files into a stock Protokit starter (`protokit-starter-kit`) and the imports resolve.
 
-> You can also build/start the UI as well, instead of using `dev` command with live-reload.
+The included `src/test/*.ts` files use Protokit's `buildNodeClient` from `core/environments/node.config.ts`. That file isn't in this snapshot because it's part of the starter scaffold.
 
+---
 
-### Running the indexer
+## Other architectural notes
 
-⚠️ Indexer only runs with docker-enabled environments, therefore it is not available with the `inmemory` environment
+### Audit ledger as unified event log
 
-```zsh
-pnpm env:development indexer:dev --filter=chain
-```
+`MinaliaLedger` records both money movements (credit/debit > 0) and ownership events (credit/debit = 0). The `kind` field disambiguates. Off-chain code scans the ledger and filters by `principalClass + principalHash` or `kind`.
 
-Indexer's graphql is available at `http://localhost:8081/graphql`, unless your environment configuraton specifies otherwise.
+Kind ranges by domain:
+- 1–24: money movement kinds (MINT, BURN, TAX, YIELD, SALE, etc.)
+- 25: generic TRANSFER
+- 100–102: unit lifecycle (REGISTERED, TRANSFERRED, MINISTER_ASSIGNED)
+- 200–203: development lifecycle (REGISTERED, UPGRADED, ARCHITECT_TRANSFERRED, MANAGER_ASSIGNED)
 
-### Running the processor
+### Cross-module reads
 
-⚠️ Processor only runs with docker-enabled environments, therefore it is not available with the `inmemory` environment
+Modules can read each other's state via `@inject` and StateMap access. For example, `MinaliaDevelopmentRegistry.registerDevelopment` asserts that the target unit exists in UnitRegistry by reading `this.unitRegistry.units.get(unitId)`. Same pattern used by Tax (looks up owner, minister hash, and ministerKey — the last for authority enforcement via `assertMinisterOf`) and Sales (looks up unit + minister, re-checks ownership at buy time).
 
-```zsh
-pnpm env:development processor:dev --filter=chain
-```
+### Block height
 
-Processor's graphql is available at `http://localhost:8082/graphql`, unless your environment configuraton specifies otherwise.
+Real block height read inside any `@runtimeMethod` via `this.network.block.height`. Used by Tax for cycle scheduling and by every ledger entry for audit chronology. API verified by reading `@proto-kit/protocol`'s `NetworkState.ts`.
 
-### CLI Options
+### Fee math
 
-- `logLevel`: Overrides the loglevel used. Also configurable via the `PROTOKIT_LOG_LEVEL` environment variable.
-- `pruneOnStartup`: If set, prunes the database before startup, so that your chain is starting from a clean, genesis state. Alias for environment variable `PROTOKIT_PRUNE_ON_STARTUP`
+Sales applies a 2% fee via basis-points: `fee = price * 200 / 10000`. Integer division truncates toward zero; for small odd prices this rounds slightly in favour of the seller (a 99-ARKIS sale yields 98 to seller, 1 to minister, instead of 97.02/1.98). Negligible at typical denominations. The trade-off is acknowledged in the test (`H5`).
 
-In order to pass in those CLI option, add it at the end of your command like this
+### Treasury transfer vs forceTransfer
 
-`pnpm env:inmemory dev --filter chain -- --logLevel DEBUG --pruneOnStartup`
+`transfer` is for **player-driven** moves: the sender must own the `from` vault, and `from` must be a player vault. System vaults (minister, king, duel-pot) cannot be the source. Used in Sales for the buyer-pays-seller leg.
 
-## Historical data processing (processor)
+`forceTransfer` is the king-gated wrapper around `performForceTransfer`, for **king-vault movements** (currency-exchange commission payouts and similar). Tax does NOT go through `forceTransfer` — it calls `performForceTransfer` directly after its own `assertMinisterOf` check, so the king is never involved in tax.
 
-Starter-kit ships with a preconfigured historical data processor using `@proto-kit/processor`. Example block & transactions handlers are available in `chain/src/processor/handlers/*`. Once the sequencer produces a block, it flows to the indexer for historical storage, and it's picked up by the processor via the indexer graphql API. The processor then runs the specified handlers in order to process the available block & transaction data into the user specified schema. Additionally the processor serves the processed data via a set of auto-generated graphql resolvers.
+---
 
-### Handling transactions
+## Versions
 
-1. Define your database schema at `chain/src/processor/prisma/schema.prisma`
-2. Generate the prisma client using `pnpm env:<your_environment_name> run processor:prisma:generate`
-3. Generate your database migrations using `pnpm env:<your_environment_name> run processor:prisma:migrate:dev`
-4. Write your handlers as shows in `chain/src/processor/handlers/**`
-5. Run the processor using `pnpm env:<your_environment_name> run processor:dev` (sequencer & indexer should be running beforehand)
+- `o1js` `2.14.0-dev.e1080`
+- `@proto-kit/*` `0.2.0`
+- `tsyringe` `^4.10.0`
+- Node 18.18.0
 
-> Processor relies on the sequencer to produce blocks, and the indexer to access them
+---
 
-Once the processor starts, you can observe it query the indexer for blocks from the last processed block (starting at #0) and running the defined onBlock handler for each block.
+## Modules done / planned
 
-Finally, you can query the processed data at the indexer's graphql API available at `http://localhost:8082/graphql` (depending on your environment configuration).
+| Done | Module |
+|---|---|
+| ✅ | MinaliaTreasury (king-gated, performForceTransfer helper) |
+| ✅ | MinaliaLedger (non-chain-addressable) |
+| ✅ | MinaliaUnitRegistry (deployer-gated, stores ministerKey, assertMinisterOf helper) |
+| ✅ | MinaliaTax (setTaxConfig deployer-gated, chargeTax minister-gated per territory) |
+| ✅ | MinaliaSales (player-driven, composes via performUnitTransfer + Treasury.transfer) |
+| ✅ | MinaliaDevelopmentRegistry (deployer-gated; minister-scoping pending) |
 
-### GraphQL API
+| Planned | Module |
+|---|---|
+| | DevelopmentRegistry minister-scoping (use `assertMinisterOf`) |
+| | Currency-exchange commission → king vault (king signs) |
+| | JobRegistry — employment relationships |
+| | Yields v2 — replaces toy DevelopmentYield, reads from UnitRegistry + DevelopmentRegistry |
+| | Wages — minister/manager paying employed players |
+| | Manager Cycles |
+| | Build — players paying to construct new developments |
+| | Leaderboard Payouts |
+| | Duels |
+| | Token Exchanges |
 
-You can define which resolvers are available in `chain/src/processor/api/resolvers.ts`. By default all available resolvers generated based on your database schema file are used. You must configure additional middlewares, validations etc. yourself. The example configures a simple validation for the `take` argument for resolvers returning multiple entities at once.
+See `docs/MIGRATION.md` for the full roadmap.
 
-## Lightnet Settlement & Bridging
+---
 
-At this point in time, the starter-kit offers settlement & bridging integration with lightnet (local mina network). You can enable these features by setting the `PROTOKIT_SETTLEMENT_ENABLED` environment variable to `true` in development .env file.
+## Contact
 
-Follow these steps to get the sequencer to settle & bridge:
-- Initialize the lightnet process, fund the sequencer operator & deploy settlement+bridging contracts:
-    ```
-    pnpm env:development lightnet:start -d
-    pnpm protokit lightnet initialize
-    ```
-
-- Run a worker, alongside with the sequencer in separate shell instances
-    ```
-    pnpm env:development worker:dev
-    pnpm env:development sequencer:dev
-    ```
-
-- Fund a testing account on lightnet (defined in the .env file)
-    ```
-    pnpm lightnet faucet B62qkVfEwyfkm5yucHEqrRjxbyx98pgdWz82pHv7LYq9Qigs812iWZ8
-    ```
-
-- Bridge the L1 $MINA to your app-chain, and observe your app-chain $MINA balance change after the next settlement lifecycle has been completed by the sequencer
-
-    > Token ID of MINA is `1` on both the L1 and app-chain
-    ```
-    pnpm protokit bridge deposit 1 TEST_ACCOUNT_1_PRIVATE_KEY TEST_ACCOUNT_1_PUBLIC_KEY 100
-    ```
-
-- Withdraw your app-chain $MINA tokens back to the L1
-    ```
-    pnpm protokit bridge withdraw 1 TEST_ACCOUNT_1_PRIVATE_KEY 100
-    ```
-
-## Deployments (sovereign environment)
-
-When deploying to a server, you should push your code along with your forked starter-kit to some repository, 
-then clone it on your remote server and execute it.
-
-> Don't forget to run `pnpm env:sovereign docker:build` to build the required images.
-
-```zsh
-# start every component with docker
-pnpm env:sovereign docker:up -d
-```
-
-UI will be accessible at `https://localhost` and GQL inspector will be available at `https://localhost/graphql` (sequencer), `https://localhost/indexer/graphql` (indexer) and `https://localhost/processor/graphql` (processor)
-
-### Configuration
-
-Go to `docker/proxy/Caddyfile` and replace the `*` matcher with your domain.
-```
-yourdomain.com {
-    ...
-}
-```
-
-> HTTPS is handled automatically by Caddy, you can (learn more about automatic https here.)[https://caddyserver.com/docs/automatic-https]
-
-In most cases, you will need to change the `NEXT_PUBLIC_PROTOKIT_GRAPHQL_URL` property in the `.env` file to the domain your graphql endpoint is running in.
-By default, the graphql endpoint is running on the same domain as your UI with the `/graphql` suffix.
-
-### Running sovereign chain locally
-
-The caddy reverse-proxy automatically uses https for all connections, use this guide to remove certificate errors when accessing localhost sites
-
-<https://caddyserver.com/docs/running#local-https-with-docker>
-
-### Monitoring
-
-Protokit offers monitoring via three different kinds of data and a collection of preconfigured services: 
-- Logs via Promtail and Loki
-- Metrics via OpenTelemetry and Prometheus
-- Traces via OpenTelemetry, OTel Collector and Tempo
-- Dashboard via Grafana
-
-#### Development
-
-In Development mode, monitoring is disabled by default.
-
-To enabled, edit the `development/.env` file in the following way:
-1. Add the monitoring profile to `COMPOSE_PROFILES`
-2. Uncomment `...metricsSequencerModules` in the sequencer's module definition. 
-Important: This has to be in front of all other modules (i.e. has to be first in the modules record)
-3. Uncomment `...metricsSequencerModulesConfig` in the configuration call.
-
-Then, run `pnpm env:development docker:up` like usual. This should start all the services needed for monitoring.
-Grafana is available at `localhost:3000`.
-
-Note: Logs are currently not available without docker, since promtail is only configured to pick up container logs
-
-#### Sovereign
-
-In Sovereign mode, monitoring is configured by default.
-
-Grafana is reachable under `localhost/grafana`.
-
-If you want to remove the monitoring services, remove the docker profile `monitoring` from the `.env` file and remove the `OpenTelemetryServer` configuration
-
-More information about monitoring can be found [here](https://github.com/proto-kit/framework/pull/272).
-
-*Deploying contracts* 
-
-`pnpm protokit lightnet initialize --env-path ./packages/chain/src/core/environments/sovereign/scripts.env`
-
-## Building the framework from source
-
-1. Make sure the framework is located under ../framework from the starter-kit's location
-2. Adapt your starter-kit's `packages/chain` and `apps/web` package.json to use the file:// references to framework, including
-references to `o1js` and `tsyringe`. Important: Make sure to update references in both chain and web, otherwise the location of the node_modules will be different and lead to errors
-
-If you want to use the sovereign environment or above:
-3. Go into the framework folder, and build a docker image containing the sources with `docker build -f ./packages/deployment/docker/development-base/Dockerfile -t protokit-base .`
-4. Replace the first line of `docker/base/Dockerfile` and `docker/web/Dockerfile` to use `FROM protokit-base:latest`
+Game: [play.minaliens.xyz](https://play.minaliens.xyz)
+Mainnet ARKIS token: `B62qohwzFkuzr39maSbXU3Vf6SUqsk7wWdAgyarM8euqCsgij5tbcUV`
