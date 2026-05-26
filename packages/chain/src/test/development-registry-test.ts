@@ -33,9 +33,8 @@ async function main() {
   const intruderKey = PrivateKey.random();
   const intruderPub = intruderKey.toPublicKey();
 
-  // Throwaway minister keypair for the test territory bootstrap.
-  // Not used to sign anything here (DevRegistry ops are still
-  // deployer-gated in this commit) but assignMinister requires it.
+  // Throwaway minister keypair. Now actually signs the DevRegistry ops
+  // (since dev mutations are minister-of-territory gated).
   const ministerKeyPair = PrivateKey.random();
   const ministerPub = ministerKeyPair.toPublicKey();
 
@@ -46,18 +45,28 @@ async function main() {
   console.log("Minister:", ministerPub.toBase58());
   console.log("Settle wait per tx:", SETTLE_MS / 1000, "s");
 
-  const authClient = buildNodeClient(deployerKey, GRAPHQL_URL);
-  await authClient.start();
+  const deployerClient = buildNodeClient(deployerKey, GRAPHQL_URL);
+  await deployerClient.start();
+  const ministerClient = buildNodeClient(ministerKeyPair, GRAPHQL_URL);
+  await ministerClient.start();
   const intruderClient = buildNodeClient(intruderKey, GRAPHQL_URL);
   await intruderClient.start();
 
-  const registry = authClient.runtime.resolve("MinaliaUnitRegistry");
-  const devs = authClient.runtime.resolve("MinaliaDevelopmentRegistry");
+  const registry = deployerClient.runtime.resolve("MinaliaUnitRegistry");
+  const ministerDevs = ministerClient.runtime.resolve("MinaliaDevelopmentRegistry");
+  const deployerDevs = deployerClient.runtime.resolve("MinaliaDevelopmentRegistry");
   const intruderDevs = intruderClient.runtime.resolve("MinaliaDevelopmentRegistry");
 
-  async function sendAuth(label: string, build: () => Promise<unknown>) {
+  async function sendDeployer(label: string, build: () => Promise<unknown>) {
     console.log("[deployer]", label);
-    const tx = await authClient.transaction(deployerPub, build as any);
+    const tx = await deployerClient.transaction(deployerPub, build as any);
+    await tx.sign();
+    await tx.send();
+    await wait(SETTLE_MS);
+  }
+  async function sendMinister(label: string, build: () => Promise<unknown>) {
+    console.log("[minister]", label);
+    const tx = await ministerClient.transaction(ministerPub, build as any);
     await tx.sign();
     await tx.send();
     await wait(SETTLE_MS);
@@ -71,7 +80,7 @@ async function main() {
   }
 
   async function getDev(devId: Field) {
-    const d = await authClient.query.runtime.MinaliaDevelopmentRegistry.developments.get(devId);
+    const d = await deployerClient.query.runtime.MinaliaDevelopmentRegistry.developments.get(devId);
     if (!d) return null;
     return {
       unitId: d.unitId.toString(),
@@ -101,20 +110,20 @@ async function main() {
   const FOUNDRY = UInt64.from(1);
   const MARKET = UInt64.from(2);
 
-  logStep("BOOTSTRAP: register territory + a unit");
-  await sendAuth("UnitRegistry.assignMinister", async () => {
+  logStep("BOOTSTRAP: register territory + unit (deployer)");
+  await sendDeployer("UnitRegistry.assignMinister", async () => {
     await registry.assignMinister(TERRITORY_ID, MINISTER_HASH, ministerPub);
   });
-  await sendAuth("UnitRegistry.registerUnit slot 1 owner=Alice", async () => {
+  await sendDeployer("UnitRegistry.registerUnit slot 1 owner=Alice", async () => {
     await registry.registerUnit(TERRITORY_ID, UNIT_SLOT, alicePub, Bool(false));
   });
 
-  logStep("DH1: register a Foundry on devSlot 1, architect=Alice");
+  logStep("DH1: minister registers a Foundry on devSlot 1, architect=Alice");
   const devSlot1 = UInt64.from(1);
   const devId1 = devIdFor(UNIT_ID, devSlot1);
 
-  await sendAuth("DevRegistry.registerDevelopment", async () => {
-    await devs.registerDevelopment(UNIT_ID, devSlot1, FOUNDRY, alicePub);
+  await sendMinister("DevRegistry.registerDevelopment", async () => {
+    await ministerDevs.registerDevelopment(UNIT_ID, devSlot1, FOUNDRY, alicePub);
   });
 
   const d1 = await getDev(devId1);
@@ -126,35 +135,35 @@ async function main() {
   if (!await expect("dev.architect = Alice", d1?.architect ?? "null", alicePub.toBase58())) failures++;
   if (!await expect("dev.initialised = true", String(d1?.initialised ?? "null"), "true")) failures++;
 
-  logStep("DH2: upgrade dev to level 2");
-  await sendAuth("DevRegistry.upgradeDevelopment", async () => {
-    await devs.upgradeDevelopment(devId1);
+  logStep("DH2: minister upgrades dev to level 2");
+  await sendMinister("DevRegistry.upgradeDevelopment", async () => {
+    await ministerDevs.upgradeDevelopment(devId1);
   });
   const d1u = await getDev(devId1);
   if (!await expect("dev.upgradeLevel = 2", d1u?.upgradeLevel ?? "null", "2")) failures++;
   if (!await expect("architect preserved", d1u?.architect ?? "null", alicePub.toBase58())) failures++;
 
-  logStep("DH3: assign Bob as manager");
-  await sendAuth("DevRegistry.assignManager", async () => {
-    await devs.assignManager(devId1, bobPub);
+  logStep("DH3: minister assigns Bob as manager");
+  await sendMinister("DevRegistry.assignManager", async () => {
+    await ministerDevs.assignManager(devId1, bobPub);
   });
   const d1m = await getDev(devId1);
   if (!await expect("dev.manager = Bob", d1m?.manager ?? "null", bobPub.toBase58())) failures++;
   if (!await expect("upgradeLevel still 2", d1m?.upgradeLevel ?? "null", "2")) failures++;
 
-  logStep("DH4: transfer architect from Alice to Bob");
-  await sendAuth("DevRegistry.transferArchitect", async () => {
-    await devs.transferArchitect(devId1, bobPub);
+  logStep("DH4: minister transfers architect from Alice to Bob");
+  await sendMinister("DevRegistry.transferArchitect", async () => {
+    await ministerDevs.transferArchitect(devId1, bobPub);
   });
   const d1a = await getDev(devId1);
   if (!await expect("dev.architect = Bob", d1a?.architect ?? "null", bobPub.toBase58())) failures++;
   if (!await expect("dev.manager still Bob", d1a?.manager ?? "null", bobPub.toBase58())) failures++;
 
-  logStep("DH5: register a Market on devSlot 2 of same unit");
+  logStep("DH5: minister registers a Market on devSlot 2 of same unit");
   const devSlot2 = UInt64.from(2);
   const devId2 = devIdFor(UNIT_ID, devSlot2);
-  await sendAuth("DevRegistry.registerDevelopment slot 2", async () => {
-    await devs.registerDevelopment(UNIT_ID, devSlot2, MARKET, alicePub);
+  await sendMinister("DevRegistry.registerDevelopment slot 2", async () => {
+    await ministerDevs.registerDevelopment(UNIT_ID, devSlot2, MARKET, alicePub);
   });
   const d2 = await getDev(devId2);
   if (!await expect("slot 2 dev exists", String(d2?.initialised ?? "null"), "true")) failures++;
@@ -193,46 +202,55 @@ async function main() {
   const d1aCheck = await getDev(devId1);
   if (!await expect("architect NOT intruder", d1aCheck?.architect ?? "null", bobPub.toBase58())) failures++;
 
-  logStep("DA5: ATTACK - register on a non-existent unit");
+  logStep("DA5: ATTACK - deployer is NO LONGER authorised");
+  // After minister-scoping migration: deployer can't drive dev ops anymore.
+  const dev1BeforeDeployerAttack = await getDev(devId1);
+  await sendDeployer("deployer assignManager should fail (not minister)", async () => {
+    await deployerDevs.assignManager(devId1, deployerPub);
+  });
+  const dev1AfterDeployerAttack = await getDev(devId1);
+  if (!await expect("manager unchanged by deployer", dev1AfterDeployerAttack?.manager ?? "null", dev1BeforeDeployerAttack?.manager ?? "null")) failures++;
+
+  logStep("DA6: ATTACK - register on a non-existent unit");
   const fakeUnitId = Field(999999);
   const fakeDevId = devIdFor(fakeUnitId, UInt64.from(1));
-  await sendAuth("deployer registerDevelopment on fake unit should fail", async () => {
-    await devs.registerDevelopment(fakeUnitId, UInt64.from(1), FOUNDRY, alicePub);
+  await sendMinister("minister registerDevelopment on fake unit should fail", async () => {
+    await ministerDevs.registerDevelopment(fakeUnitId, UInt64.from(1), FOUNDRY, alicePub);
   });
   const fakeDev = await getDev(fakeDevId);
   if (!await expect("no dev created on fake unit", String(fakeDev?.initialised ?? "false"), "false")) failures++;
 
-  logStep("DA6: ATTACK - register on already-occupied slot");
+  logStep("DA7: ATTACK - register on already-occupied slot");
   const d1Before = await getDev(devId1);
-  await sendAuth("deployer registerDevelopment on occupied slot 1 should fail", async () => {
-    await devs.registerDevelopment(UNIT_ID, devSlot1, MARKET, alicePub);
+  await sendMinister("minister registerDevelopment on occupied slot 1 should fail", async () => {
+    await ministerDevs.registerDevelopment(UNIT_ID, devSlot1, MARKET, alicePub);
   });
   const d1After = await getDev(devId1);
   if (!await expect("dev1 devType still Foundry", d1After?.devType ?? "null", "1")) failures++;
   if (!await expect("dev1 architect unchanged", d1After?.architect ?? "null", d1Before?.architect ?? "null")) failures++;
 
-  logStep("DA7: ATTACK - upgrade an empty slot");
+  logStep("DA8: ATTACK - upgrade an empty slot");
   const emptyDevId = devIdFor(UNIT_ID, UInt64.from(5));
-  await sendAuth("deployer upgradeDevelopment on empty slot 5 should fail", async () => {
-    await devs.upgradeDevelopment(emptyDevId);
+  await sendMinister("minister upgradeDevelopment on empty slot 5 should fail", async () => {
+    await ministerDevs.upgradeDevelopment(emptyDevId);
   });
   const stillEmpty = await getDev(emptyDevId);
   if (!await expect("slot 5 still empty", String(stillEmpty?.initialised ?? "false"), "false")) failures++;
 
-  logStep("DA8: ATTACK - register at devSlot 99 (max is 15)");
+  logStep("DA9: ATTACK - register at devSlot 99 (max is 15)");
   const farSlot = UInt64.from(99);
   const farDevId = devIdFor(UNIT_ID, farSlot);
-  await sendAuth("deployer registerDevelopment slot 99 should fail", async () => {
-    await devs.registerDevelopment(UNIT_ID, farSlot, FOUNDRY, alicePub);
+  await sendMinister("minister registerDevelopment slot 99 should fail", async () => {
+    await ministerDevs.registerDevelopment(UNIT_ID, farSlot, FOUNDRY, alicePub);
   });
   const farDev = await getDev(farDevId);
   if (!await expect("no dev created at slot 99", String(farDev?.initialised ?? "false"), "false")) failures++;
 
-  logStep("DA8b: ATTACK - register at devSlot 0");
+  logStep("DA10: ATTACK - register at devSlot 0");
   const zeroSlot = UInt64.from(0);
   const zeroDevId = devIdFor(UNIT_ID, zeroSlot);
-  await sendAuth("deployer registerDevelopment slot 0 should fail", async () => {
-    await devs.registerDevelopment(UNIT_ID, zeroSlot, FOUNDRY, alicePub);
+  await sendMinister("minister registerDevelopment slot 0 should fail", async () => {
+    await ministerDevs.registerDevelopment(UNIT_ID, zeroSlot, FOUNDRY, alicePub);
   });
   const zeroDev = await getDev(zeroDevId);
   if (!await expect("no dev created at slot 0", String(zeroDev?.initialised ?? "false"), "false")) failures++;

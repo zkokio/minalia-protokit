@@ -118,9 +118,7 @@ export const config: ModulesConfig<typeof modules> = {
     authority: DEPLOYER_PUB,
   },
   MinaliaSales: {},
-  MinaliaDevelopmentRegistry: {
-    authority: DEPLOYER_PUB,
-  },
+  MinaliaDevelopmentRegistry: {},
 };
 
 export default {
