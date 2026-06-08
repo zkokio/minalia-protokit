@@ -43,3 +43,4 @@ starter-kit.iml
 
 docker/data
 minalia-keys.env
+nohup.out
