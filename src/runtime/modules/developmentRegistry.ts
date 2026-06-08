@@ -3,7 +3,7 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
+import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
@@ -19,12 +19,11 @@ export const DEV_EVENT_KIND = {
 } as const;
 
 // Game design constraint: each unit can hold up to 15 developments.
-// Enforced on-chain so misconfigured callers cannot create out-of-range slots.
 export const MAX_DEVS_PER_UNIT = UInt64.from(15);
 
 // Sentinel for "no manager assigned." Same convention as TreasuryKey.fromDuelPot
-// using Field(0) for an absent identity. Real PublicKeys have non-zero x.
-// We use PublicKey.empty() as the canonical no-manager value.
+// using Field(0) for an absent identity. We use PublicKey.empty() as the
+// canonical no-manager value.
 export const NO_MANAGER = PublicKey.empty();
 
 export class DevelopmentState extends Struct({
@@ -37,21 +36,20 @@ export class DevelopmentState extends Struct({
   initialised: Bool,
 }) {}
 
-// Derive on-chain development ID from a unit ID + slot index.
-// Off-chain code uses the same formula to derive the key.
 export function devIdFor(unitId: Field, devSlot: UInt64): Field {
   return Poseidon.hash([unitId, devSlot.value]);
 }
 
+// Per-territory minister-gated. Each method asserts the sender is the
+// minister of the unit's territory (via UnitRegistry.assertMinisterOf).
+// No deployer-gating: governance ops on developments don't exist yet -
+// if one is ever added, this module can take a config field for it.
 @runtimeModule()
-export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
+export class MinaliaDevelopmentRegistry extends RuntimeModule<Record<string, never>> {
   @state() public developments = StateMap.from<Field, DevelopmentState>(
     Field,
     DevelopmentState,
   );
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaLedger") public ledger: MinaliaLedger,
@@ -60,25 +58,8 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
-  private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
-    const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
-  }
-
   // Register a new development at unitId/devSlot.
-  // devSlot is bounded to MAX_DEVS_PER_UNIT (15) per the game design.
-  // Initial manager is the sentinel NO_MANAGER; assignManager sets it later.
+  // Caller must be the minister of the unit's territory.
   @runtimeMethod()
   public async registerDevelopment(
     unitId: Field,
@@ -86,25 +67,18 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
     devType: UInt64,
     architect: PublicKey,
   ): Promise<void> {
-    await this.assertAuthority();
+    // Asserts unit exists + sender is the minister of unit's territory.
+    await this.unitRegistry.assertMinisterOf(unitId);
 
-    // Architect must be a real key, not the empty/null sentinel.
     assert(
       architect.equals(NO_MANAGER).not(),
       "Architect cannot be the empty PublicKey",
     );
-
-    // Slot cap: refuse out-of-range slot numbers.
     assert(
       devSlot.lessThanOrEqual(MAX_DEVS_PER_UNIT),
       "Slot number exceeds max",
     );
-    // Also reject slot 0 — slots are 1-indexed in MINALIA.
     assert(devSlot.greaterThan(UInt64.zero), "Slot number must be >= 1");
-
-    // The unit must exist in UnitRegistry.
-    const unitResult = await this.unitRegistry.units.get(unitId);
-    assert(unitResult.value.initialised, "Unit not registered");
 
     const devId = devIdFor(unitId, devSlot);
     const existing = await this.developments.get(devId);
@@ -138,15 +112,15 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
   }
 
   // Increment the upgrade level of an existing development by 1.
-  // No max-level enforced on-chain; that's a Build-module concern.
+  // Caller must be the minister of the dev's unit's territory.
   @runtimeMethod()
   public async upgradeDevelopment(devId: Field): Promise<void> {
-    await this.assertAuthority();
-
     const result = await this.developments.get(devId);
     assert(result.value.initialised, "Development not registered");
 
     const current = result.value;
+    await this.unitRegistry.assertMinisterOf(current.unitId);
+
     const newLevel = current.upgradeLevel.add(UInt64.from(1));
 
     await this.developments.set(
@@ -174,15 +148,12 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
   }
 
   // Change the architect (e.g. when an architect-share is sold).
+  // Caller must be the minister of the dev's unit's territory.
   @runtimeMethod()
   public async transferArchitect(
     devId: Field,
     newArchitect: PublicKey,
   ): Promise<void> {
-    await this.assertAuthority();
-
-
-    // New architect must be a real key, not the empty/null sentinel.
     assert(
       newArchitect.equals(NO_MANAGER).not(),
       "Architect cannot be the empty PublicKey",
@@ -191,6 +162,8 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
     assert(result.value.initialised, "Development not registered");
 
     const current = result.value;
+    await this.unitRegistry.assertMinisterOf(current.unitId);
+
     await this.developments.set(
       devId,
       new DevelopmentState({
@@ -216,17 +189,18 @@ export class MinaliaDevelopmentRegistry extends RuntimeModule<unknown> {
   }
 
   // Assign or change the manager. Pass NO_MANAGER to clear.
+  // Caller must be the minister of the dev's unit's territory.
   @runtimeMethod()
   public async assignManager(
     devId: Field,
     newManager: PublicKey,
   ): Promise<void> {
-    await this.assertAuthority();
-
     const result = await this.developments.get(devId);
     assert(result.value.initialised, "Development not registered");
 
     const current = result.value;
+    await this.unitRegistry.assertMinisterOf(current.unitId);
+
     await this.developments.set(
       devId,
       new DevelopmentState({

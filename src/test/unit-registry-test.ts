@@ -8,6 +8,12 @@ import {
 const GRAPHQL_URL = process.env.PROTOKIT_GRAPHQL_URL ?? "http://localhost:8080/graphql";
 const SETTLE_MS = 10000;
 
+const DEPLOYER_PRIVATE_KEY = process.env.MINALIA_DEPLOYER_PRIVATE_KEY;
+if (!DEPLOYER_PRIVATE_KEY) {
+  console.error("MINALIA_DEPLOYER_PRIVATE_KEY env var is required.");
+  process.exit(1);
+}
+
 async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -19,32 +25,25 @@ function logStep(label: string) {
 }
 
 async function main() {
-  // The authority key — once set, only this key can mutate the registry.
-  const authorityKey = PrivateKey.random();
-  const authorityPub = authorityKey.toPublicKey();
-
-  // A separate key used to test the "non-authority" rejection path.
+  const deployerKey = PrivateKey.fromBase58(DEPLOYER_PRIVATE_KEY!);
+  const deployerPub = deployerKey.toPublicKey();
   const intruderKey = PrivateKey.random();
   const intruderPub = intruderKey.toPublicKey();
-
-  // A player who will own a unit.
   const playerKey = PrivateKey.random();
   const playerPub = playerKey.toPublicKey();
-
-  // A second player to receive a transferred unit.
   const player2Key = PrivateKey.random();
   const player2Pub = player2Key.toPublicKey();
+  const ministerKeyPair = PrivateKey.random();
+  const ministerPub = ministerKeyPair.toPublicKey();
 
-  console.log("Authority:", authorityPub.toBase58());
+  console.log("Deployer:", deployerPub.toBase58());
   console.log("Intruder:", intruderPub.toBase58());
   console.log("Player 1:", playerPub.toBase58());
   console.log("Player 2:", player2Pub.toBase58());
-  console.log(`Settle wait per tx: ${SETTLE_MS / 1000}s`);
+  console.log("Minister:", ministerPub.toBase58());
+  console.log("Settle wait per tx:", SETTLE_MS / 1000, "s");
 
-  // We need TWO clients because each is bound to a different signer key.
-  // The authority client signs valid mutations; the intruder client signs
-  // the rejection-path tx.
-  const authClient = buildNodeClient(authorityKey, GRAPHQL_URL);
+  const authClient = buildNodeClient(deployerKey, GRAPHQL_URL);
   await authClient.start();
   const intruderClient = buildNodeClient(intruderKey, GRAPHQL_URL);
   await intruderClient.start();
@@ -52,24 +51,21 @@ async function main() {
   const authRegistry = authClient.runtime.resolve("MinaliaUnitRegistry");
   const intruderRegistry = intruderClient.runtime.resolve("MinaliaUnitRegistry");
 
-  // Test territory + slot. Use unique-looking values to avoid colliding with
-  // any leftover state in the in-memory chain across test runs.
-  // Field values derived from a string-like nonce to keep them distinctive.
   const TERRITORY_ID = Field(900001);
   const MINISTER_HASH = Field(900099);
   const SLOT_1 = UInt64.from(1);
   const SLOT_2 = UInt64.from(2);
 
   async function sendAuth(label: string, build: () => Promise<unknown>) {
-    console.log(`→ [auth] ${label}`);
-    const tx = await authClient.transaction(authorityPub, build as any);
+    console.log("[deployer]", label);
+    const tx = await authClient.transaction(deployerPub, build as any);
     await tx.sign();
     await tx.send();
     await wait(SETTLE_MS);
   }
 
   async function sendIntruder(label: string, build: () => Promise<unknown>) {
-    console.log(`→ [intruder] ${label}`);
+    console.log("[intruder]", label);
     const tx = await intruderClient.transaction(intruderPub, build as any);
     await tx.sign();
     await tx.send();
@@ -94,53 +90,31 @@ async function main() {
     if (!t) return null;
     return {
       minister: t.minister.toString(),
+      ministerKey: t.ministerKey.toBase58(),
       initialised: t.initialised.toBoolean(),
     };
   }
 
-  async function getAuthorityInitialised(): Promise<boolean> {
-    const v = await authClient.query.runtime.MinaliaUnitRegistry.authorityInitialised.get();
-    return v?.toBoolean() ?? false;
-  }
-
   async function expect(label: string, actual: string, expected: string) {
     const pass = actual === expected;
-    const symbol = pass ? "✓" : "✗";
-    console.log(`  ${symbol} ${label}: got=${actual}, expected=${expected}`);
+    const symbol = pass ? "PASS" : "FAIL";
+    console.log("  ", symbol, label, "got=", actual, "expected=", expected);
     return pass;
   }
 
   let failures = 0;
 
-  // ── TEST 1: setAuthority ─────────────────────────────────────────
-  // If authority is already initialised (from a prior test run on the
-  // same in-memory chain), skip — this test only makes sense once.
-  logStep("TEST 1: setAuthority (one-time bootstrap)");
-  const alreadyInit = await getAuthorityInitialised();
-  if (alreadyInit) {
-    console.log("  authority already initialised on this chain — skipping set; using existing");
-    console.log("  NOTE: subsequent tests assume the existing authority matches this test's authority,");
-    console.log("  which it won't on a re-run. Restart the node for a clean test of authority gating.");
-  } else {
-    await sendAuth("setAuthority(authorityPub)", async () => {
-      await authRegistry.setAuthority(authorityPub);
-    });
-    const initAfter = await getAuthorityInitialised();
-    if (!await expect("authorityInitialised", String(initAfter), "true")) failures++;
-  }
-
-  // ── TEST 2: assignMinister ───────────────────────────────────────
-  logStep("TEST 2: assignMinister(territory, ministerHash)");
+  logStep("TEST 1: assignMinister with ministerKey");
   await sendAuth("assignMinister", async () => {
-    await authRegistry.assignMinister(TERRITORY_ID, MINISTER_HASH);
+    await authRegistry.assignMinister(TERRITORY_ID, MINISTER_HASH, ministerPub);
   });
   const tState = await getTerritory(TERRITORY_ID);
   console.log("  territory state:", tState);
   if (!await expect("territory.minister", tState?.minister ?? "null", MINISTER_HASH.toString())) failures++;
+  if (!await expect("territory.ministerKey", tState?.ministerKey ?? "null", ministerPub.toBase58())) failures++;
   if (!await expect("territory.initialised", String(tState?.initialised ?? false), "true")) failures++;
 
-  // ── TEST 3: registerUnit (player-owned) ──────────────────────────
-  logStep("TEST 3: registerUnit slot 1, owner=Player1, isMinisterHeld=false");
+  logStep("TEST 2: registerUnit slot 1, owner=Player1");
   await sendAuth("registerUnit", async () => {
     await authRegistry.registerUnit(TERRITORY_ID, SLOT_1, playerPub, Bool(false));
   });
@@ -154,9 +128,8 @@ async function main() {
   if (!await expect("unit.isMinisterHeld", String(u1?.isMinisterHeld ?? "null"), "false")) failures++;
   if (!await expect("unit.initialised", String(u1?.initialised ?? "null"), "true")) failures++;
 
-  // ── TEST 4: registerUnit (minister-held) ─────────────────────────
-  logStep("TEST 4: registerUnit slot 2, isMinisterHeld=true");
-  await sendAuth("registerUnit (minister-held)", async () => {
+  logStep("TEST 3: registerUnit slot 2, isMinisterHeld=true");
+  await sendAuth("registerUnit minister-held", async () => {
     await authRegistry.registerUnit(TERRITORY_ID, SLOT_2, playerPub, Bool(true));
   });
   const unitId2 = unitIdFor(TERRITORY_ID, SLOT_2);
@@ -164,8 +137,7 @@ async function main() {
   console.log("  unit:", u2);
   if (!await expect("unit.isMinisterHeld", String(u2?.isMinisterHeld ?? "null"), "true")) failures++;
 
-  // ── TEST 5: transferUnit ─────────────────────────────────────────
-  logStep("TEST 5: transferUnit slot 1 → Player2 (clears isMinisterHeld)");
+  logStep("TEST 4: transferUnit slot 1 to Player2");
   await sendAuth("transferUnit", async () => {
     await authRegistry.transferUnit(unitId1, player2Pub);
   });
@@ -173,35 +145,25 @@ async function main() {
   console.log("  unit after transfer:", u1after);
   if (!await expect("unit.owner after transfer", u1after?.owner ?? "null", player2Pub.toBase58())) failures++;
   if (!await expect("unit.isMinisterHeld after transfer", String(u1after?.isMinisterHeld ?? "null"), "false")) failures++;
-  // Minister & territory should be preserved
   if (!await expect("unit.minister preserved", u1after?.minister ?? "null", MINISTER_HASH.toString())) failures++;
 
-  // ── TEST 6: intruder cannot register a unit ──────────────────────
-  // The intruder signs a tx calling registerUnit. Because the signer != authority,
-  // the on-chain assertion should fail and no unit should appear at slot 3.
-  logStep("TEST 6: intruder rejected when calling registerUnit");
+  logStep("TEST 5: intruder rejected from registerUnit");
   const SLOT_3 = UInt64.from(3);
   const unitId3 = unitIdFor(TERRITORY_ID, SLOT_3);
-  const beforeIntruder = await getUnit(unitId3);
-  console.log("  unit at slot 3 before intruder attempt:", beforeIntruder);
-
-  await sendIntruder("registerUnit by intruder (should fail)", async () => {
+  await sendIntruder("registerUnit by intruder should fail", async () => {
     await intruderRegistry.registerUnit(TERRITORY_ID, SLOT_3, intruderPub, Bool(false));
   });
-
   const afterIntruder = await getUnit(unitId3);
   console.log("  unit at slot 3 after intruder attempt:", afterIntruder);
-  // The unit should still NOT exist (assertion in the runtime method rejected the tx).
   const intruderRejected =
     afterIntruder === null || afterIntruder.initialised === false;
   if (!await expect("intruder did NOT create unit", String(intruderRejected), "true")) failures++;
 
-  // ── SUMMARY ──────────────────────────────────────────────────────
   logStep("SUMMARY");
   if (failures === 0) {
-    console.log("✓ All assertions passed");
+    console.log("All assertions passed");
   } else {
-    console.log(`✗ ${failures} assertion(s) failed`);
+    console.log(failures, "assertion(s) failed");
   }
   process.exit(failures === 0 ? 0 : 1);
 }

@@ -3,7 +3,7 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
+import { StateMap, assert, state } from "@proto-kit/protocol";
 import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Poseidon, Struct } from "o1js";
 import { inject } from "tsyringe";
@@ -25,8 +25,15 @@ export class UnitState extends Struct({
   initialised: Bool,
 }) {}
 
+// TerritoryState carries two pieces of minister info:
+//   - minister:    Field hash of the Minalien NFT identity ("which NFT is the minister")
+//   - ministerKey: PublicKey of the keypair that signs minister txs ("which key signs")
+// Both are set once at bootstrap via assignMinister and never changed.
+// Immutable by design: no on-chain rotation path. If a minister key is
+// lost or compromised, recovery is at the game layer (area relaunch).
 export class TerritoryState extends Struct({
   minister: Field,
+  ministerKey: PublicKey,
   initialised: Bool,
 }) {}
 
@@ -79,16 +86,20 @@ export async function performUnitTransfer(
   );
 }
 
+// Genesis-config authority key. Set in runtime/index.ts via the module
+// config object — baked into the chain from block 0. No runtime method
+// to change it, no race window to front-run.
+interface UnitRegistryConfig {
+  authority: PublicKey;
+}
+
 @runtimeModule()
-export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
+export class MinaliaUnitRegistry extends RuntimeModule<UnitRegistryConfig> {
   @state() public units = StateMap.from<Field, UnitState>(Field, UnitState);
   @state() public territories = StateMap.from<Field, TerritoryState>(
     Field,
     TerritoryState,
   );
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaLedger") public ledger: MinaliaLedger,
@@ -96,26 +107,48 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
+  // Private helper used by methods that need authority gating.
+  // Authority comes from genesis config, not from runtime state.
   private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
     const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
+    assert(
+      sender.equals(this.config.authority),
+      "Sender is not the authority",
+    );
   }
 
+  // Asserts that the transaction sender is the minister of the territory
+  // that the given unit belongs to. Used by Tax (and later by
+  // DevelopmentRegistry) to gate per-territory operations.
+  // NOT a @runtimeMethod — called from inside other modules' methods.
+  public async assertMinisterOf(unitId: Field): Promise<void> {
+    const unitResult = await this.units.get(unitId);
+    assert(unitResult.value.initialised, "Unit not registered");
+
+    const territoryResult = await this.territories.get(
+      unitResult.value.territoryId,
+    );
+    assert(
+      territoryResult.value.initialised,
+      "Territory not initialised",
+    );
+
+    const sender = this.transaction.sender.value;
+    assert(
+      sender.equals(territoryResult.value.ministerKey),
+      "Sender is not the minister of this territory",
+    );
+  }
+
+  // Bootstrap-only: assign a minister to a territory. Sets BOTH the
+  // in-game NFT identity (ministerHash) AND the crypto key the minister
+  // uses to sign transactions (ministerKey). Once set, neither can be
+  // changed — there is no rotation path by design.
   @runtimeMethod()
   public async assignMinister(
     territoryId: Field,
     ministerHash: Field,
+    ministerKey: PublicKey,
   ): Promise<void> {
     await this.assertAuthority();
 
@@ -123,6 +156,7 @@ export class MinaliaUnitRegistry extends RuntimeModule<unknown> {
       territoryId,
       new TerritoryState({
         minister: ministerHash,
+        ministerKey,
         initialised: Bool(true),
       }),
     );

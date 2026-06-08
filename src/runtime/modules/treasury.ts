@@ -66,6 +66,62 @@ interface TreasuryConfig {
   authority: PublicKey;
 }
 
+// Intentionally NOT a @runtimeMethod. This helper performs the actual
+// system-driven transfer between any two vaults. It is only callable
+// from inside another @runtimeMethod that has already done its own
+// access control — there is no chain-addressable path here.
+//
+// Same pattern as performUnitTransfer in unitRegistry.ts: shared
+// mutation lives in a plain helper, callers are @runtimeMethods that
+// gate their own entry.
+//
+// Used by:
+//   - Treasury.forceTransfer (king-gated wrapper, for currency-exchange
+//     and other king-vault movements)
+//   - Tax.chargeTax (after asserting sender is the unit's minister)
+export async function performForceTransfer(
+  balances: StateMap<TreasuryKey, Balance>,
+  ledger: MinaliaLedger,
+  blockHeight: UInt64,
+  from: TreasuryKey,
+  to: TreasuryKey,
+  amount: Balance,
+  kind: UInt64,
+): Promise<void> {
+  const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
+  const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
+  assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
+
+  const fromExisting = await balances.get(from);
+  const fromBal = fromExisting.value;
+  assert(amount.lessThanOrEqual(fromBal), "Transfer exceeds source balance");
+  await balances.set(from, fromBal.sub(amount));
+
+  const toExisting = await balances.get(to);
+  const toBal = toExisting.value;
+  await balances.set(to, toBal.add(amount));
+
+  await ledger.record(
+    from.treasuryClass,
+    from.keyHash,
+    from.tokenId,
+    Balance.from(0),
+    amount,
+    kind,
+    blockHeight,
+  );
+
+  await ledger.record(
+    to.treasuryClass,
+    to.keyHash,
+    to.tokenId,
+    amount,
+    Balance.from(0),
+    kind,
+    blockHeight,
+  );
+}
+
 @runtimeModule()
 export class MinaliaTreasury extends RuntimeModule<TreasuryConfig> {
   @state() public balances = StateMap.from<TreasuryKey, Balance>(TreasuryKey, Balance);
@@ -220,10 +276,15 @@ export class MinaliaTreasury extends RuntimeModule<TreasuryConfig> {
     );
   }
 
-  // System-driven transfer. Sender must be the authority.
-  // Used for tax, wages, leaderboard payouts, and admin moves of money
-  // out of system vaults (minister/king/duel-pot) or out of player vaults
-  // without the player's signature (tax collection, etc).
+  // System-driven transfer, king-gated. Public chain entry for moving
+  // money out of system vaults (king/minister/duel-pot) or out of a
+  // player vault without the player's signature. Currently used for
+  // currency-exchange commission payouts and admin moves.
+  //
+  // Modules that need to issue system transfers from inside their own
+  // gated methods (Tax.chargeTax, etc.) should call the bare
+  // performForceTransfer helper instead, after doing their own
+  // access check.
   @runtimeMethod()
   public async forceTransfer(
     from: TreasuryKey,
@@ -232,40 +293,14 @@ export class MinaliaTreasury extends RuntimeModule<TreasuryConfig> {
     kind: UInt64,
   ): Promise<void> {
     await this.assertAuthority();
-
-    const toIsDuelPot = to.treasuryClass.equals(TREASURY_CLASS.DUEL_POT);
-    const isZarkis = to.tokenId.equals(ZARKIS_TOKEN_ID);
-    assert(toIsDuelPot.not().or(isZarkis), "DUEL-POT only accepts ZARKIS");
-
-    const fromExisting = await this.balances.get(from);
-    const fromBal = fromExisting.value;
-    assert(amount.lessThanOrEqual(fromBal), "Transfer exceeds source balance");
-    await this.balances.set(from, fromBal.sub(amount));
-
-    const toExisting = await this.balances.get(to);
-    const toBal = toExisting.value;
-    await this.balances.set(to, toBal.add(amount));
-
-    const blockHeight = this.network.block.height;
-
-    await this.ledger.record(
-      from.treasuryClass,
-      from.keyHash,
-      from.tokenId,
-      Balance.from(0),
+    await performForceTransfer(
+      this.balances,
+      this.ledger,
+      this.network.block.height,
+      from,
+      to,
       amount,
       kind,
-      blockHeight,
-    );
-
-    await this.ledger.record(
-      to.treasuryClass,
-      to.keyHash,
-      to.tokenId,
-      amount,
-      Balance.from(0),
-      kind,
-      blockHeight,
     );
   }
 }

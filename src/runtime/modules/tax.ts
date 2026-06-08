@@ -3,11 +3,16 @@ import {
   runtimeMethod,
   RuntimeModule,
 } from "@proto-kit/module";
-import { StateMap, State, assert, state } from "@proto-kit/protocol";
-import { Balance, TokenId } from "@proto-kit/library";
+import { StateMap, assert, state } from "@proto-kit/protocol";
+import { Balance } from "@proto-kit/library";
 import { Field, PublicKey, UInt64, Bool, Provable, Struct } from "o1js";
 import { inject } from "tsyringe";
-import { MinaliaTreasury, TreasuryKey, ZARKIS_TOKEN_ID } from "./treasury";
+import {
+  MinaliaTreasury,
+  TreasuryKey,
+  ZARKIS_TOKEN_ID,
+  performForceTransfer,
+} from "./treasury";
 import { MinaliaUnitRegistry } from "./unitRegistry";
 import { LEDGER_KIND } from "./ledger";
 
@@ -17,14 +22,23 @@ export class TaxConfig extends Struct({
   initialised: Bool,
 }) {}
 
+// Genesis-config authority key. Set in runtime/index.ts via the module
+// config object. Named TaxModuleConfig to avoid collision with TaxConfig
+// (the per-unit tax settings struct above).
+//
+// This authority is the DEPLOYER, used only for setTaxConfig (governance
+// op: adjusting the tax rate). chargeTax has a different gating model:
+// it's signed by the territory's minister, checked via
+// registry.assertMinisterOf — see chargeTax below.
+interface TaxModuleConfig {
+  authority: PublicKey;
+}
+
 @runtimeModule()
-export class MinaliaTax extends RuntimeModule<unknown> {
+export class MinaliaTax extends RuntimeModule<TaxModuleConfig> {
   @state() public configs = StateMap.from<Field, TaxConfig>(Field, TaxConfig);
   @state() public debts = StateMap.from<Field, Balance>(Field, Balance);
   @state() public lastCharged = StateMap.from<Field, UInt64>(Field, UInt64);
-
-  @state() public authority = State.from<PublicKey>(PublicKey);
-  @state() public authorityInitialised = State.from<Bool>(Bool);
 
   public constructor(
     @inject("MinaliaTreasury") public treasury: MinaliaTreasury,
@@ -33,22 +47,20 @@ export class MinaliaTax extends RuntimeModule<unknown> {
     super();
   }
 
-  @runtimeMethod()
-  public async setAuthority(key: PublicKey): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value.not(), "Authority already initialised");
-    await this.authority.set(key);
-    await this.authorityInitialised.set(Bool(true));
-  }
-
+  // Private helper used by methods that need authority gating against
+  // the deployer key (governance ops). Authority comes from genesis
+  // config, not from runtime state.
   private async assertAuthority(): Promise<void> {
-    const initResult = await this.authorityInitialised.get();
-    assert(initResult.value, "Authority not initialised");
-    const authResult = await this.authority.get();
     const sender = this.transaction.sender.value;
-    assert(sender.equals(authResult.value), "Sender is not the authority");
+    assert(
+      sender.equals(this.config.authority),
+      "Sender is not the authority",
+    );
   }
 
+  // Deployer-gated governance op: set or update the tax parameters for
+  // a unit. Tax rates are nominally fixed but can be adjusted centrally
+  // via this method.
   @runtimeMethod()
   public async setTaxConfig(
     unitId: Field,
@@ -70,6 +82,12 @@ export class MinaliaTax extends RuntimeModule<unknown> {
   /**
    * Attempt to charge tax for a unit.
    *
+   * Minister-gated: caller must be the minister of the territory the
+   * unit belongs to (checked via registry.assertMinisterOf). The
+   * money flows from the unit owner's player vault into THAT
+   * minister's vault — so the minister key collecting tax for LUM-07
+   * cannot route the funds anywhere except LUM-07's minister vault.
+   *
    * Semantics (all-or-nothing with debt accrual):
    *  - Cycle not ready → no-op, state unchanged, no ledger spam.
    *    Enforced by an assertion so callers don't waste blocks.
@@ -77,16 +95,15 @@ export class MinaliaTax extends RuntimeModule<unknown> {
    *    the full amount; clear debt; advance lastCharged.
    *  - Cycle ready, owner can't afford → no transfer; accrue this cycle's
    *    amount on top of existing debt; advance lastCharged.
-   *
-   * Authority-gated. Tax cron / scheduler calls this once per unit per cycle.
    */
   @runtimeMethod()
   public async chargeTax(unitId: Field): Promise<void> {
-    await this.assertAuthority();
+    // Gate on minister-of-territory. This both validates the sender
+    // AND implicitly validates that the unit exists + territory
+    // initialised (assertMinisterOf asserts both).
+    await this.registry.assertMinisterOf(unitId);
 
     const unitResult = await this.registry.units.get(unitId);
-    assert(unitResult.value.initialised, "Unit not registered");
-
     const configResult = await this.configs.get(unitId);
     assert(configResult.value.initialised, "No tax config for unit");
 
@@ -142,10 +159,18 @@ export class MinaliaTax extends RuntimeModule<unknown> {
     await this.debts.set(unitId, newDebt);
     await this.lastCharged.set(unitId, now);
 
-    // Issue the transfer. When activeCharge == 0, Treasury writes two
-    // zero-amount ledger entries — acceptable as an audit trail for "tax
-    // cycle attempted, no payment due to insufficient balance".
-    await this.treasury.forceTransfer(
+    // Issue the transfer directly via the bare helper. We can't use
+    // treasury.forceTransfer because that's king-gated, and tax txs
+    // are signed by ministers, not the king. The minister auth check
+    // was done at the top via assertMinisterOf.
+    //
+    // When activeCharge == 0, performForceTransfer writes two
+    // zero-amount ledger entries — acceptable as an audit trail for
+    // "tax cycle attempted, no payment due to insufficient balance".
+    await performForceTransfer(
+      this.treasury.balances,
+      this.treasury.ledger,
+      now,
       ownerKey,
       ministerKey,
       activeCharge,
