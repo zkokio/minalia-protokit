@@ -11,6 +11,7 @@ import { MinaliaUnitRegistry } from "./modules/unitRegistry";
 import { MinaliaTax } from "./modules/tax";
 import { MinaliaSales } from "./modules/sales";
 import { MinaliaDevelopmentRegistry } from "./modules/developmentRegistry";
+import { MinaliaJobRegistry } from "./modules/jobRegistry";
 
 // ---------------------------------------------------------------------------
 // Minalia chain role public keys.
@@ -84,6 +85,7 @@ export const MINISTER_PUBS: ReadonlyArray<MinisterPubEntry> = [
 //   - Tax.setTaxConfig                                        -> DEPLOYER_PUB
 //   - Tax.chargeTax (per unit)                                -> minister-of-territory
 //   - DevelopmentRegistry.* (per unit)                        -> minister-of-territory
+//   - JobRegistry.* (per unit)                                -> minister-of-territory
 //
 // Per-minister authority is resolved at runtime via UnitRegistry, not from
 // genesis config (Protokit configs are scalar-only; no StateMap seeding).
@@ -99,6 +101,7 @@ export const modules = VanillaRuntimeModules.with({
   MinaliaTax,
   MinaliaSales,
   MinaliaDevelopmentRegistry,
+  MinaliaJobRegistry,
 });
 
 export const config: ModulesConfig<typeof modules> = {
@@ -119,6 +122,7 @@ export const config: ModulesConfig<typeof modules> = {
   },
   MinaliaSales: {},
   MinaliaDevelopmentRegistry: {},
+  MinaliaJobRegistry: {},
 };
 
 export default {
